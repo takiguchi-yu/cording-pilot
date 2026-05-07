@@ -175,7 +175,7 @@ func runGitCmd(ctx context.Context, dir string, args ...string) error {
 }
 
 // copyDir は src ディレクトリの内容を dst ディレクトリへ再帰的にコピーします。
-// VCS 管理用ディレクトリ（.git と .worktrees）はスキップします。
+// VCS 管理用ディレクトリ（.git と .worktrees）および開発環境依存ディレクトリ（.direnv）はスキップします。
 func copyDir(src, dst string) error {
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -194,6 +194,12 @@ func copyDir(src, dst string) error {
 			return nil
 		}
 		if rel == ".worktrees" || strings.HasPrefix(rel, ".worktrees/") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if rel == ".direnv" || strings.HasPrefix(rel, ".direnv/") {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
