@@ -16,8 +16,7 @@ import (
 )
 
 const (
-	maxTryCount  = 3
-	goModContent = "module task\n\ngo 1.21\n"
+	maxTryCount = 3
 )
 
 // ImplementState は ② 実装フェーズ（Fix Loop 含む）です。
@@ -56,10 +55,6 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 		return nil, fmt.Errorf("implement: create work dir: %w", err)
 	}
 	wfCtx.WorkDir = workDir
-
-	if err = os.WriteFile(filepath.Join(workDir, "go.mod"), []byte(goModContent), 0o600); err != nil {
-		return nil, fmt.Errorf("implement: write go.mod: %w", err)
-	}
 
 	// Step 1: generate test code.
 	testResult, err := s.generateTestCode(ctx, wfCtx)
@@ -200,8 +195,14 @@ func (s *ImplementState) runPipeline(ctx context.Context, workDir string, steps 
 }
 
 func (s *ImplementState) generateTestCode(ctx context.Context, wfCtx *Context) (agent.CodeGenerationResult, error) {
+	cfg := wfCtx.Config
+	if cfg == nil {
+		cfg = config.DefaultGoConfig()
+	}
 	prompt := fmt.Sprintf(
-		"[TEST_GEN] 以下の実装計画に基づいてGoのテストコード(task_test.go)を生成してください。\n\n%s",
+		"[TEST_GEN] 以下の実装計画に基づいて [%s] のテストコードを [%s] を用いて生成してください。ファイルの拡張子やディレクトリ構造は対象言語のベストプラクティスおよび既存のリポジトリ構成に従うこと。\n\n%s",
+		cfg.Project.Language,
+		cfg.Project.TestFramework,
 		wfCtx.PlanText,
 	)
 	result, err := s.Coder.GenerateCode(ctx, prompt)
@@ -212,8 +213,13 @@ func (s *ImplementState) generateTestCode(ctx context.Context, wfCtx *Context) (
 }
 
 func (s *ImplementState) generateImplCode(ctx context.Context, wfCtx *Context) (agent.CodeGenerationResult, error) {
+	cfg := wfCtx.Config
+	if cfg == nil {
+		cfg = config.DefaultGoConfig()
+	}
 	prompt := fmt.Sprintf(
-		"以下の実装計画とパイプライン失敗の出力を元に、プロダクトコードを生成してください。\n\n## 実装計画\n%s\n\n## パイプライン出力\n%s",
+		"以下の実装計画とパイプライン失敗の出力を元に、[%s] のプロダクトコードを生成してください。ファイルの拡張子やディレクトリ構造は対象言語のベストプラクティスおよび既存のリポジトリ構成に従うこと。\n\n## 実装計画\n%s\n\n## パイプライン出力\n%s",
+		cfg.Project.Language,
 		wfCtx.PlanText,
 		wfCtx.LastTestOutput,
 	)

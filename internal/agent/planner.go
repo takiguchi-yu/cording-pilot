@@ -95,10 +95,8 @@ func (p *plannerAgentImpl) CompileIssue(ctx context.Context, requirement string,
 // NewPlannerAgent は要件の不足を分析して対話的に要件を確定する計画エージェントを生成します。
 func (f *Factory) NewPlannerAgent() PlannerAgent {
 	return &plannerAgentImpl{
-		name: "Planner",
-		systemPrompt: `あなたは優秀なソフトウェアアーキテクトです。
-与えられた要件を分析し、実装前に明確にすべき事項を洗い出します。
-質問は具体的かつ簡潔にし、実装上の意思決定に直結するものに絞ってください。`,
-		llm: f.llm,
+		name:         "Planner",
+		systemPrompt: f.cfg.Agents.Planner,
+		llm:          f.llm,
 	}
 }

@@ -12,6 +12,24 @@ import (
 // DefaultConfigFileName はプロジェクトルートに配置する設定ファイルのデフォルト名です。
 const DefaultConfigFileName = ".cording-pilot.yml"
 
+// Project はターゲット言語とテストフレームワークの設定を保持します。
+type Project struct {
+	// Language は対象プログラミング言語です（例: "go", "python", "typescript"）。
+	Language string `yaml:"language"`
+	// TestFramework はテストフレームワーク名です（例: "standard testing", "pytest", "jest"）。
+	TestFramework string `yaml:"test_framework"`
+}
+
+// Agents は各 AI エージェントのシステムプロンプトを保持します。
+type Agents struct {
+	// Planner は計画エージェントのシステムプロンプトです。
+	Planner string `yaml:"planner"`
+	// Coder は実装エージェントのシステムプロンプトです。
+	Coder string `yaml:"coder"`
+	// Reviewer はレビューエージェントのシステムプロンプトです。
+	Reviewer string `yaml:"reviewer"`
+}
+
 // LLM は LLM プロバイダーとモデルの設定を保持します。
 type LLM struct {
 	// Provider は使用する LLM プロバイダーです（例: "copilot", "openai"）。
@@ -42,6 +60,10 @@ type PipelineStep struct {
 type Config struct {
 	// Version は設定ファイルのスキーマバージョンです。
 	Version string `yaml:"version"`
+	// Project はターゲット言語とテストフレームワークの設定です。
+	Project Project `yaml:"project"`
+	// Agents は各 AI エージェントのシステムプロンプト設定です。
+	Agents Agents `yaml:"agents"`
 	// LLM は LLM プロバイダーとモデルの設定です。
 	LLM LLM `yaml:"llm"`
 	// Environment は実行環境の設定です。
@@ -54,6 +76,15 @@ type Config struct {
 func DefaultGoConfig() *Config {
 	return &Config{
 		Version: "1.0",
+		Project: Project{
+			Language:      "go",
+			TestFramework: "standard testing",
+		},
+		Agents: Agents{
+			Planner:  defaultPlannerPrompt,
+			Coder:    defaultCoderPrompt,
+			Reviewer: defaultReviewerPrompt,
+		},
 		LLM: LLM{
 			Provider: "copilot",
 			Model:    "gpt-4o",
@@ -69,6 +100,23 @@ func DefaultGoConfig() *Config {
 		},
 	}
 }
+
+const defaultPlannerPrompt = `あなたは優秀なソフトウェアアーキテクトです。
+与えられた要件を分析し、実装計画（目的・仕様・影響範囲）を日本語のMarkdown形式で出力してください。`
+
+const defaultCoderPrompt = `あなたは熟練のエンジニアです。
+テストコードまたはプロダクトコードの生成を求められます。
+余分な説明やMarkdownコードブロックは含めず、以下のJSONスキーマに厳密に従って出力してください。
+
+{"files":[{"path":"ファイルのパス","content":"ファイルの内容"}]}
+
+- path にはリポジトリルートからの相対パスを指定してください。
+- content にはファイルの完全な内容を文字列として指定してください。
+- ファイルの拡張子やディレクトリ構造は、対象言語のベストプラクティスおよび既存のリポジトリ構成に従うこと。`
+
+const defaultReviewerPrompt = `あなたは厳格なコードレビュアーです。
+差分と要件を突き合わせてレビューし、結果を "Approve" または "Request Changes" のいずれかで冒頭に明示してください。
+問題点がある場合は具体的な修正点を列挙してください。`
 
 // Load は path で指定した YAML ファイルを読み込み、Config を返します。
 // ファイルが存在しない場合は DefaultGoConfig を返します。
@@ -97,6 +145,21 @@ func Load(path string) (*Config, error) {
 
 // fillDefaults は設定ファイルの省略されたフィールドにデフォルト値を設定します。
 func (c *Config) fillDefaults() {
+	if c.Project.Language == "" {
+		c.Project.Language = "go"
+	}
+	if c.Project.TestFramework == "" {
+		c.Project.TestFramework = "standard testing"
+	}
+	if c.Agents.Planner == "" {
+		c.Agents.Planner = defaultPlannerPrompt
+	}
+	if c.Agents.Coder == "" {
+		c.Agents.Coder = defaultCoderPrompt
+	}
+	if c.Agents.Reviewer == "" {
+		c.Agents.Reviewer = defaultReviewerPrompt
+	}
 	if c.LLM.Provider == "" {
 		c.LLM.Provider = "copilot"
 	}

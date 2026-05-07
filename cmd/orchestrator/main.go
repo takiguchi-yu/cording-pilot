@@ -114,7 +114,7 @@ func run(requirement string, issueNumber int, logDest *os.File, exec executor.Ex
 	ghClient, ghToken, repoOwner, repoName, baseBranch := initGitHub(context.Background(), log)
 
 	// ── Agent Factory ────────────────────────────────────────────────────────
-	factory := agent.NewFactory(llmClient)
+	factory := agent.NewFactory(llmClient, cfg)
 	planner := factory.NewPlannerAgent()
 	coder := factory.NewCoderAgent()
 	reviewer := factory.NewReviewer()

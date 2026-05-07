@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/takiguchi-yu/cording-pilot/internal/agent"
+	"github.com/takiguchi-yu/cording-pilot/internal/config"
 )
 
 // plannerStubLLM は PlannerAgent のテスト用 LLM スタブです。
@@ -42,7 +43,7 @@ func TestFactory_NewPlannerAgent_GenerateClarification_質問あり(t *testing.T
 		},
 	}
 	stub := &plannerStubLLM{clarification: want}
-	f := agent.NewFactory(stub)
+	f := agent.NewFactory(stub, config.DefaultGoConfig())
 	pa := f.NewPlannerAgent()
 
 	got, err := pa.GenerateClarification(context.Background(), "文字列を逆順にする関数")
@@ -62,7 +63,7 @@ func TestFactory_NewPlannerAgent_GenerateClarification_要件明確(t *testing.T
 
 	want := agent.ClarificationRequest{IsClear: true}
 	stub := &plannerStubLLM{clarification: want}
-	f := agent.NewFactory(stub)
+	f := agent.NewFactory(stub, config.DefaultGoConfig())
 	pa := f.NewPlannerAgent()
 
 	got, err := pa.GenerateClarification(context.Background(), "明確な要件")
@@ -79,7 +80,7 @@ func TestFactory_NewPlannerAgent_GenerateClarification_LLMエラー時にエラ�
 
 	wantErr := errors.New("structured llm error")
 	stub := &plannerStubLLM{structuredErr: wantErr}
-	f := agent.NewFactory(stub)
+	f := agent.NewFactory(stub, config.DefaultGoConfig())
 	pa := f.NewPlannerAgent()
 
 	_, err := pa.GenerateClarification(context.Background(), "要件")
@@ -92,7 +93,7 @@ func TestFactory_NewPlannerAgent_CompileIssue_成功(t *testing.T) {
 	t.Parallel()
 
 	stub := &plannerStubLLM{compiledIssue: "## 実装計画\n..."}
-	f := agent.NewFactory(stub)
+	f := agent.NewFactory(stub, config.DefaultGoConfig())
 	pa := f.NewPlannerAgent()
 
 	got, err := pa.CompileIssue(context.Background(), "初期要件", map[string]string{"q1": "新規機能"})
@@ -109,7 +110,7 @@ func TestFactory_NewPlannerAgent_CompileIssue_LLMエラー時にエラーを返�
 
 	wantErr := errors.New("generate error")
 	stub := &plannerStubLLM{generateErr: wantErr}
-	f := agent.NewFactory(stub)
+	f := agent.NewFactory(stub, config.DefaultGoConfig())
 	pa := f.NewPlannerAgent()
 
 	_, err := pa.CompileIssue(context.Background(), "要件", map[string]string{})
@@ -123,7 +124,7 @@ func TestFactory_NewPlannerAgent_Askを呼び出す(t *testing.T) {
 	t.Parallel()
 
 	stub := &plannerStubLLM{compiledIssue: "plan output"}
-	f := agent.NewFactory(stub)
+	f := agent.NewFactory(stub, config.DefaultGoConfig())
 	pa := f.NewPlannerAgent()
 
 	// PlannerAgent は Agent を埋め込むため Ask も使用可能。
