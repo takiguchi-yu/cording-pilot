@@ -1,0 +1,64 @@
+sequenceDiagram
+    autonumber
+    actor User as 開発者
+    participant Conductor as オーケストレーター (CLI)
+    participant Planner as 計画Agent (要件整理)
+    participant GitHub as GitHub (Issue/PR)
+    participant Coder as 実装Agent (Go/DB)
+    participant Docker as 隔離環境 (Docker/Worktree)
+    participant Reviewer as 査読Agent (レビュー)
+
+    rect rgb(245, 245, 255)
+        Note over User, GitHub: ⓪ インプット獲得フェーズ
+        alt Issueが既に存在する場合
+            User->>Conductor: Issue番号を指定して実行 (例: run #12)
+            Conductor->>GitHub: Issueの内容を取得
+        else Issueが存在しない場合 (対話モード)
+            User->>Conductor: 新規タスクの実行を要求 (自然言語でざっくり入力)
+            loop 要件が明確になるまで
+                Conductor->>Planner: ユーザー入力を渡し、要件の不足を分析
+                Planner-->>Conductor: 確認事項・質問を生成
+                Conductor->>User: CLI上でヒアリング (質問の提示)
+                User-->>Conductor: 回答・仕様の補足
+            end
+            Conductor->>Planner: 確定した要件からIssue形式のMarkdown生成を指示
+            Planner-->>Conductor: Issue内容
+            Conductor->>GitHub: 新規Issueを作成し、番号を取得
+        end
+    end
+
+    Conductor->>Conductor: タスクキューに追加し、隔離環境(Worktree)を作成
+
+    rect rgb(240, 248, 255)
+        Note over Conductor, Reviewer: ① 計画フェーズ (Plan)
+        Conductor->>Planner: Issueを元に具体的な実装計画と影響範囲を作成
+        Planner-->>Conductor: 実装計画を出力
+    end
+
+    rect rgb(240, 255, 240)
+        Note over Conductor, Reviewer: ② 実装フェーズ (Implement / TDD)
+        Conductor->>Coder: 計画に基づく実装を指示
+        loop Fix Loop (上限回数あり)
+            Coder->>Docker: テストコード作成 & コンテナ内で実行
+            Docker-->>Coder: エラー結果 (Red)
+            Coder->>Docker: プロダクトコード作成 & 実行
+            Docker-->>Coder: テスト通過 (Green) or エラー (Red)
+        end
+        Coder-->>Conductor: 実装完了
+    end
+
+    rect rgb(255, 240, 240)
+        Note over Conductor, Reviewer: ③ レビューフェーズ (Review)
+        Conductor->>Reviewer: 差分と要件の突合・レビューを指示
+        Reviewer-->>Conductor: 結果 (Approve / Request Changes)
+        opt 問題がある場合 (NG)
+            Conductor->>Coder: 修正点を伝達し、実装フェーズへ差し戻し
+        end
+    end
+
+    rect rgb(255, 250, 205)
+        Note over Conductor, GitHub: ④ 完了フェーズ (Complete)
+        Conductor->>GitHub: コードをPush & PRを作成
+        Conductor->>Conductor: 全過程をNDJSONでロギング・隔離環境を破棄
+        Conductor-->>User: 処理完了を通知
+    end

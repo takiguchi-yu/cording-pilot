@@ -3,6 +3,8 @@
 Go製のAIエージェントオーケストレーターCLIです。  
 要件整理、実装計画、実装、レビューの流れをステートマシンで管理し、品質チェックまで自動化することを目的としています。
 
+[![CI](https://github.com/takiguchi-yu/cording-pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/takiguchi-yu/cording-pilot/actions/workflows/ci.yml)
+
 ## できること
 
 - Planner/Coder/Reviewer などの役割を持つエージェントを切り替えて実行
