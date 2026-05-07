@@ -164,3 +164,49 @@ func containsString(ss []string, s string) bool {
 	}
 	return false
 }
+
+// ── sanitizeJSONResponse ──────────────────────────────────────────────────────
+
+func TestSanitizeJSONResponse(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "Markdownブロックなしはそのまま返す",
+			input: `{"key":"value"}`,
+			want:  `{"key":"value"}`,
+		},
+		{
+			name:  "```jsonフェンスを除去する",
+			input: "```json\n{\"key\":\"value\"}\n```",
+			want:  `{"key":"value"}`,
+		},
+		{
+			name:  "```フェンス（言語指定なし）を除去する",
+			input: "```\n{\"key\":\"value\"}\n```",
+			want:  `{"key":"value"}`,
+		},
+		{
+			name:  "前後の空白を除去する",
+			input: "  \n```json\n{\"key\":\"value\"}\n```\n  ",
+			want:  `{"key":"value"}`,
+		},
+		{
+			name:  "フェンスなしの前後空白のみ除去する",
+			input: "  {\"key\":\"value\"}  ",
+			want:  `{"key":"value"}`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := llm.ExportSanitizeJSONResponse(tc.input)
+			if got != tc.want {
+				t.Errorf("sanitizeJSONResponse(%q) = %q; want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}

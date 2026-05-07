@@ -25,8 +25,8 @@ func TestDefaultGoConfig_デフォルト値が正しく設定される(t *testin
 	if cfg.LLM.Provider != "copilot" {
 		t.Errorf("LLM.Provider=%q; want %q", cfg.LLM.Provider, "copilot")
 	}
-	if cfg.LLM.Model != "gpt-4o" {
-		t.Errorf("LLM.Model=%q; want %q", cfg.LLM.Model, "gpt-4o")
+	if cfg.LLM.Model != "gpt-4.1" {
+		t.Errorf("LLM.Model=%q; want %q", cfg.LLM.Model, "gpt-4.1")
 	}
 	if len(cfg.Pipeline) == 0 {
 		t.Error("Pipeline should not be empty")

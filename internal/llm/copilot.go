@@ -72,8 +72,9 @@ func (c *CopilotClient) Generate(ctx context.Context, prompt string) (string, er
 }
 
 // GenerateStructured implements Client.
-// プロンプトを GitHub Models API に送信し、ResponseFormatJSONSchema を使用して
-// 構造化 JSON を取得し target にデコードします。
+// プロンプトを GitHub Models API に送信し、構造化 JSON を取得して target にデコードします。
+// モデル名に "claude" が含まれる場合はプロンプトに JSON スキーマを埋め込む方式を使用し、
+// それ以外のモデルでは ResponseFormatJSONSchema を使用します。
 // JSON デコードに失敗した場合は ErrJSONParse をラップしたエラーを返します。
 func (c *CopilotClient) GenerateStructured(ctx context.Context, prompt string, target interface{}) error {
 	schema := jsonSchemaFromValue(target)
@@ -82,24 +83,34 @@ func (c *CopilotClient) GenerateStructured(ctx context.Context, prompt string, t
 		return fmt.Errorf("llm: marshal schema: %w", err)
 	}
 
-	_ = c.log.Debug("llm.generateStructured.request", fmt.Sprintf("prompt=%q schema=%s", prompt, schemaBytes))
+	isClaude := strings.Contains(c.model, "claude")
+
+	userPrompt := prompt
+	if isClaude {
+		userPrompt = prompt + "\n\n【重要】以下の JSON スキーマに完全に一致する JSON 文字列のみを出力してください。Markdown ブロック（```json 等）や前後の説明は一切含めないでください。\n" + string(schemaBytes)
+	}
+
+	_ = c.log.Debug("llm.generateStructured.request", fmt.Sprintf("prompt=%q schema=%s isClaude=%v", userPrompt, schemaBytes, isClaude))
 
 	var raw string
 	retryErr := retry.Do(ctx, retry.DefaultPolicy, func() error {
-		resp, apiErr := c.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+		req := openai.ChatCompletionRequest{
 			Model: c.model,
 			Messages: []openai.ChatCompletionMessage{
-				{Role: openai.ChatMessageRoleUser, Content: prompt},
+				{Role: openai.ChatMessageRoleUser, Content: userPrompt},
 			},
-			ResponseFormat: &openai.ChatCompletionResponseFormat{
+		}
+		if !isClaude {
+			req.ResponseFormat = &openai.ChatCompletionResponseFormat{
 				Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
 				JSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
 					Name:   "output",
 					Schema: jsonMarshalMap(schema),
 					Strict: true,
 				},
-			},
-		})
+			}
+		}
+		resp, apiErr := c.client.CreateChatCompletion(ctx, req)
 		if apiErr != nil {
 			return fmt.Errorf("llm: generate structured: %w", apiErr)
 		}
@@ -112,11 +123,32 @@ func (c *CopilotClient) GenerateStructured(ctx context.Context, prompt string, t
 
 	_ = c.log.Debug("llm.generateStructured.response", fmt.Sprintf("raw=%q", raw))
 
-	if jsonErr := json.Unmarshal([]byte(raw), target); jsonErr != nil {
+	// Claude がMarkdownコードブロックを付けて返してくる場合に備えてサニタイズする。
+	sanitized := sanitizeJSONResponse(raw)
+
+	if jsonErr := json.Unmarshal([]byte(sanitized), target); jsonErr != nil {
 		_ = c.log.Error("llm.generateStructured.parseError", fmt.Sprintf("error=%v raw=%q", jsonErr, raw))
-		return fmt.Errorf("%w: %w", ErrJSONParse, jsonErr)
+		return fmt.Errorf("%w: %w (raw: %s)", ErrJSONParse, jsonErr, raw)
 	}
 	return nil
+}
+
+// sanitizeJSONResponse は LLM レスポンス文字列の前後に付与された
+// Markdown コードブロック（```json ... ``` 等）を除去し、純粋な JSON 文字列を返します。
+func sanitizeJSONResponse(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "```") {
+		// 最初の行（```json 等のフェンス行）を除去する。
+		if idx := strings.Index(s, "\n"); idx != -1 {
+			s = s[idx+1:]
+		}
+		// 末尾の ``` を除去する。
+		if strings.HasSuffix(s, "```") {
+			s = s[:len(s)-3]
+		}
+		s = strings.TrimSpace(s)
+	}
+	return s
 }
 
 // jsonMarshalMap は json.Marshaler を実装する map ラッパーです。

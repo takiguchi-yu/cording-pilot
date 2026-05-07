@@ -7,3 +7,7 @@ var ExportJSONSchemaFromValue = jsonSchemaFromValue
 // ExportJSONSchemaFromType はテスト専用のエクスポートラッパーです。
 // jsonSchemaFromType を package 外部から呼び出せるようにします。
 var ExportJSONSchemaFromType = jsonSchemaFromType
+
+// ExportSanitizeJSONResponse はテスト専用のエクスポートラッパーです。
+// sanitizeJSONResponse を package 外部から呼び出せるようにします。
+var ExportSanitizeJSONResponse = sanitizeJSONResponse
