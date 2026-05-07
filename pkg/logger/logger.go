@@ -13,6 +13,8 @@ import (
 type Level string
 
 const (
+	// LevelDebug は詳細なデバッグ情報に使用します。
+	LevelDebug Level = "DEBUG"
 	// LevelInfo は通常の情報イベントに使用します。
 	LevelInfo Level = "INFO"
 	// LevelWarn は回復可能な異常に使用します。
@@ -54,6 +56,11 @@ func (l *Logger) Log(level Level, event, message string) error {
 		return fmt.Errorf("logger: %w", err)
 	}
 	return nil
+}
+
+// Debug は DEBUG レベルのエントリを記録します。
+func (l *Logger) Debug(event, message string) error {
+	return l.Log(LevelDebug, event, message)
 }
 
 // Info は INFO レベルのエントリを記録します。

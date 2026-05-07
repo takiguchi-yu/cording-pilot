@@ -1,7 +1,10 @@
 {
   "cSpell.words": [
     "analysing",
+    "atotto",
     "autonumber",
+    "aymanbagabas",
+    "catppuccin",
     "direnv",
     "Errorf",
     "Fatalf",
@@ -13,7 +16,9 @@
     "nixos",
     "pkgs",
     "Println",
+    "sashabaranov",
     "specialised",
     "worktrees"
-  ]
+  ],
+  "cSpell.ignoreRegExpList": ["*.sum"]
 }

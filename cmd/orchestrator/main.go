@@ -78,8 +78,13 @@ func main() {
 // main から分離することで、注入ロジックをテストで独立して検証できるようにしています。
 func run(requirement string, logDest *os.File, exec executor.Executor, cfg *config.Config) error {
 	// ── Strategies ──────────────────────────────────────────────────────────
-	llmClient := llm.NewMockClient()
 	log := logger.New(logDest)
+
+	llmClient, err := newLLMClient(cfg, log)
+	if err != nil {
+		_ = log.Error("startup", fmt.Sprintf("LLM クライアントの初期化に失敗しました: %v", err))
+		return fmt.Errorf("llm client: %w", err)
+	}
 
 	// ── Agent Factory ────────────────────────────────────────────────────────
 	factory := agent.NewFactory(llmClient)
@@ -132,4 +137,19 @@ func run(requirement string, logDest *os.File, exec executor.Executor, cfg *conf
 	// ── Runner ───────────────────────────────────────────────────────────────
 	runner := workflow.NewRunner()
 	return runner.Run(context.Background(), interactiveState, wfCtx)
+}
+
+// newLLMClient は cfg.LLM.Provider に基づいて適切な llm.Client を生成します。
+// 必要な環境変数が未設定の場合は起動時に Fail-fast します。
+func newLLMClient(cfg *config.Config, log *logger.Logger) (llm.Client, error) {
+	switch cfg.LLM.Provider {
+	case "copilot":
+		token := os.Getenv("GITHUB_TOKEN")
+		if token == "" {
+			return nil, fmt.Errorf("provider %q には GITHUB_TOKEN 環境変数が必要です", cfg.LLM.Provider)
+		}
+		return llm.NewCopilotClient(cfg.LLM.Model, token, log)
+	default:
+		return nil, fmt.Errorf("未対応の LLM プロバイダーです: %q (対応プロバイダー: copilot)", cfg.LLM.Provider)
+	}
 }

@@ -1,5 +1,11 @@
 version: "1.0"
 
+llm:
+  # 使用する LLM プロバイダー（現在対応: copilot）
+  provider: "copilot"
+  # 使用するモデル名
+  model: "gpt-4o"
+
 environment:
   # Docker コンテナ実行時に使用するイメージ。
   # golangci-lint イメージには go, golangci-lint, goimports が含まれています。

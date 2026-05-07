@@ -12,6 +12,14 @@ import (
 // DefaultConfigFileName はプロジェクトルートに配置する設定ファイルのデフォルト名です。
 const DefaultConfigFileName = ".cording-pilot.yml"
 
+// LLM は LLM プロバイダーとモデルの設定を保持します。
+type LLM struct {
+	// Provider は使用する LLM プロバイダーです（例: "copilot", "openai"）。
+	Provider string `yaml:"provider"`
+	// Model は使用するモデル名です（例: "gpt-4o", "claude-3-5-sonnet-20240620"）。
+	Model string `yaml:"model"`
+}
+
 // Environment は実行環境に関する設定を保持します。
 type Environment struct {
 	// Image は使用する Docker イメージ名です（例: "golang:1.22"）。
@@ -30,6 +38,8 @@ type PipelineStep struct {
 type Config struct {
 	// Version は設定ファイルのスキーマバージョンです。
 	Version string `yaml:"version"`
+	// LLM は LLM プロバイダーとモデルの設定です。
+	LLM LLM `yaml:"llm"`
 	// Environment は実行環境の設定です。
 	Environment Environment `yaml:"environment"`
 	// Pipeline は順序が保証されたコマンドのリストです。
@@ -40,6 +50,10 @@ type Config struct {
 func DefaultGoConfig() *Config {
 	return &Config{
 		Version: "1.0",
+		LLM: LLM{
+			Provider: "copilot",
+			Model:    "gpt-4o",
+		},
 		Environment: Environment{
 			Image: "golangci/golangci-lint:latest",
 		},
@@ -69,10 +83,28 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: parse yaml %q: %w", path, err)
 	}
 
+	cfg.fillDefaults()
+
 	if err = cfg.validate(); err != nil {
 		return nil, fmt.Errorf("config: validate %q: %w", path, err)
 	}
 	return &cfg, nil
+}
+
+// fillDefaults は設定ファイルの省略されたフィールドにデフォルト値を設定します。
+func (c *Config) fillDefaults() {
+	if c.LLM.Provider == "" {
+		c.LLM.Provider = "copilot"
+	}
+	if c.LLM.Model == "" {
+		c.LLM.Model = "gpt-4o"
+	}
+	if c.Environment.Image == "" {
+		c.Environment.Image = DefaultGoConfig().Environment.Image
+	}
+	if len(c.Pipeline) == 0 {
+		c.Pipeline = DefaultGoConfig().Pipeline
+	}
 }
 
 // validate は Config の内容を検証します。
