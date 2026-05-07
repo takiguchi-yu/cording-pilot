@@ -8,7 +8,8 @@ sequenceDiagram
     participant Docker as 隔離環境 (Docker/Worktree)
     participant Reviewer as 査読Agent (レビュー)
 
-    rect rgb(245, 245, 255)
+    %% インプット獲得フェーズ (透明度の高い青紫)
+    rect rgba(130, 130, 255, 0.15)
         Note over User, GitHub: ⓪ インプット獲得フェーズ
         alt Issueが既に存在する場合
             User->>Conductor: Issue番号を指定して実行 (例: run #12)
@@ -29,13 +30,15 @@ sequenceDiagram
 
     Conductor->>Conductor: タスクキューに追加し、隔離環境(Worktree)を作成
 
-    rect rgb(240, 248, 255)
+    %% 計画フェーズ (透明度の高い青)
+    rect rgba(0, 150, 255, 0.15)
         Note over Conductor, Reviewer: ① 計画フェーズ (Plan)
         Conductor->>Planner: Issueを元に具体的な実装計画と影響範囲を作成
         Planner-->>Conductor: 実装計画を出力
     end
 
-    rect rgb(240, 255, 240)
+    %% 実装フェーズ (透明度の高い緑)
+    rect rgba(50, 200, 100, 0.15)
         Note over Conductor, Reviewer: ② 実装フェーズ (Implement / TDD)
         Conductor->>Coder: 計画に基づく実装を指示
         loop Fix Loop (上限回数あり)
@@ -47,7 +50,8 @@ sequenceDiagram
         Coder-->>Conductor: 実装完了
     end
 
-    rect rgb(255, 240, 240)
+    %% レビューフェーズ (透明度の高い赤)
+    rect rgba(255, 100, 100, 0.15)
         Note over Conductor, Reviewer: ③ レビューフェーズ (Review)
         Conductor->>Reviewer: 差分と要件の突合・レビューを指示
         Reviewer-->>Conductor: 結果 (Approve / Request Changes)
@@ -56,7 +60,8 @@ sequenceDiagram
         end
     end
 
-    rect rgb(255, 250, 205)
+    %% 完了フェーズ (透明度の高い黄色)
+    rect rgba(255, 200, 50, 0.15)
         Note over Conductor, GitHub: ④ 完了フェーズ (Complete)
         Conductor->>GitHub: コードをPush & PRを作成
         Conductor->>Conductor: 全過程をNDJSONでロギング・隔離環境を破棄
