@@ -53,13 +53,6 @@ func (s *CompleteState) Execute(ctx context.Context, wfCtx *Context) (State, err
 		}
 	}
 
-	// Best-effort cleanup of the isolated work directory.
-	if wfCtx.WorkDir != "" {
-		if err := os.RemoveAll(wfCtx.WorkDir); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to remove work dir %s: %v\n", wfCtx.WorkDir, err)
-		}
-	}
-
 	return nil, nil
 }
 
@@ -148,12 +141,13 @@ func (s *CompleteState) pushAndCreatePR(ctx context.Context, wfCtx *Context) err
 }
 
 // generateBranchName は IssueNumber からブランチ名を生成します。
-// Issue 番号が 0 の場合はタイムスタンプを使用します。
+// タイムスタンプを付与することで、同一 Issue を再実行した際のブランチ名競合を回避します。
 func generateBranchName(issueNumber int) string {
+	ts := time.Now().Format("20060102150405")
 	if issueNumber > 0 {
-		return fmt.Sprintf("issue-%d/implement", issueNumber)
+		return fmt.Sprintf("issue-%d/implement-%s", issueNumber, ts)
 	}
-	return fmt.Sprintf("cording-pilot/%d", time.Now().Unix())
+	return fmt.Sprintf("cording-pilot/%s", ts)
 }
 
 // buildCommitMessage は IssueNumber に基づいてコミットメッセージを生成します。

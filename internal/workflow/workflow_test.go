@@ -178,7 +178,7 @@ func TestCompleteState_Execute_nilを返しワークフローを終了する(t *
 	}
 }
 
-func TestCompleteState_Execute_WorkDirを削除する(t *testing.T) {
+func TestCompleteState_Execute_WorkDirを削除しない(t *testing.T) {
 	t.Parallel()
 	s := &workflow.CompleteState{Logger: newLogger()}
 	dir := t.TempDir()
@@ -188,8 +188,9 @@ func TestCompleteState_Execute_WorkDirを削除する(t *testing.T) {
 	if err != nil {
 		t.Fatalf("予期しないエラー: %v", err)
 	}
-	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
-		t.Errorf("WorkDir %q は削除されているはずですが存在します", dir)
+	// クリーンアップは Runner の責務なので、CompleteState 実行後はまだ存在する。
+	if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+		t.Errorf("WorkDir %q は CompleteState 実行後も存在するはずです", dir)
 	}
 }
 
@@ -239,6 +240,33 @@ func TestRunner_Run_Stateエラー時にエラーを返す(t *testing.T) {
 	}
 	if !errors.Is(err, wantErr) {
 		t.Errorf("error should wrap wantErr; got: %v", err)
+	}
+}
+
+func TestRunner_Run_正常終了時にWorkDirを削除する(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	wfCtx := &workflow.Context{WorkDir: dir}
+
+	r := workflow.NewRunner()
+	err := r.Run(context.Background(), &stubState{}, wfCtx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Errorf("WorkDir %q は正常終了後に削除されるはずです", dir)
+	}
+}
+
+func TestRunner_Run_エラー終了時にWorkDirを削除する(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	wfCtx := &workflow.Context{WorkDir: dir}
+
+	r := workflow.NewRunner()
+	_ = r.Run(context.Background(), &errState{err: errors.New("boom")}, wfCtx)
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Errorf("WorkDir %q はエラー終了後も削除されるはずです", dir)
 	}
 }
 

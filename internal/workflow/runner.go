@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"os"
 )
 
 // Runner はステートマシンを驱動します。
@@ -15,7 +16,16 @@ func NewRunner() *Runner {
 }
 
 // Run は initial からステートマシンを開始し、終了またはエラーまでステートを進めます。
+// ワークフローの終了時（正常・エラー・シグナル問わず）に WorkDir を確実に削除します。
 func (r *Runner) Run(ctx context.Context, initial State, wfCtx *Context) error {
+	defer func() {
+		if wfCtx.WorkDir != "" {
+			if err := os.RemoveAll(wfCtx.WorkDir); err != nil {
+				fmt.Fprintf(os.Stderr, "runner: cleanup: failed to remove work dir %s: %v\n", wfCtx.WorkDir, err)
+			}
+		}
+	}()
+
 	current := initial
 	for current != nil {
 		next, err := current.Execute(ctx, wfCtx)
