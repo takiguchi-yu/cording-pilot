@@ -8,6 +8,7 @@
     "direnv",
     "Errorf",
     "Fatalf",
+    "githubpkg",
     "GOARCH",
     "gofmt",
     "goimports",
@@ -16,6 +17,7 @@
     "nixos",
     "pkgs",
     "Println",
+    "rgba",
     "sashabaranov",
     "specialised",
     "worktrees"

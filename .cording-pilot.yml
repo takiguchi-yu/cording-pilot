@@ -7,7 +7,12 @@ llm:
   model: "gpt-4o"
 
 environment:
-  # Docker コンテナ実行時に使用するイメージ。
+  # 実行環境の種類: local（デフォルト）, docker, nix
+  # - local: ホストマシンで直接実行
+  # - docker: Docker コンテナ内で実行（image フィールドが必要）
+  # - nix: リポジトリの flake.nix を使用して nix develop 環境内で実行
+  type: "local"
+  # Docker コンテナ実行時に使用するイメージ（type: docker の場合のみ参照）。
   # golangci-lint イメージには go, golangci-lint, goimports が含まれています。
   image: "golangci/golangci-lint:latest"
 

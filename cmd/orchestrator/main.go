@@ -33,14 +33,15 @@ import (
 )
 
 func main() {
-	useDocker := flag.Bool("docker", false, "ローカルの代わりに Docker Executor を使用する")
+	useDocker := flag.Bool("docker", false, "ローカルの代わりに Docker Executor を使用する（environment.type=docker のショートカット）")
+	useNix := flag.Bool("nix", false, "ローカルの代わりに Nix Executor を使用する（environment.type=nix のショートカット）")
 	dockerImage := flag.String("docker-image", "", "Docker Executor で使用するイメージ（省略時は設定ファイルの image を使用）")
 	configPath := flag.String("config", config.DefaultConfigFileName, "プロジェクト設定ファイルのパス")
 	issueNumber := flag.Int("issue", 0, "処理する GitHub Issue 番号（指定時は要件引数を省略可）")
 	flag.Parse()
 
 	if flag.NArg() < 1 && *issueNumber == 0 {
-		fmt.Fprintln(os.Stderr, `Usage: orchestrator [--docker] [--docker-image IMAGE] [--config PATH] [--issue NUMBER] "<requirement>"`)
+		fmt.Fprintln(os.Stderr, `Usage: orchestrator [--docker] [--nix] [--docker-image IMAGE] [--config PATH] [--issue NUMBER] "<requirement>"`)
 		os.Exit(1)
 	}
 
@@ -59,10 +60,25 @@ func main() {
 		cfg.Environment.Image = *dockerImage
 	}
 
+	// CLI フラグは設定ファイルの environment.type を上書きする。
+	executorType := cfg.Environment.Type
+	if *useNix {
+		executorType = "nix"
+	} else if *useDocker {
+		executorType = "docker"
+	}
+
 	var exec executor.Executor
-	if *useDocker {
+	switch executorType {
+	case "nix":
+		nixExec, nixErr := executor.NewNixExecutor()
+		if nixErr != nil {
+			log.Fatalf("failed to create nix executor: %v", nixErr)
+		}
+		exec = nixExec
+	case "docker":
 		exec = executor.NewDockerExecutor(cfg.Environment.Image)
-	} else {
+	default:
 		exec = executor.NewLocalExecutor()
 	}
 

@@ -22,7 +22,11 @@ type LLM struct {
 
 // Environment は実行環境に関する設定を保持します。
 type Environment struct {
+	// Type は使用する実行環境の種類です（"local", "docker", "nix"）。
+	// 省略時は "local" が使用されます。
+	Type string `yaml:"type"`
 	// Image は使用する Docker イメージ名です（例: "golang:1.22"）。
+	// type が "docker" の場合のみ参照されます。
 	Image string `yaml:"image"`
 }
 
@@ -99,7 +103,10 @@ func (c *Config) fillDefaults() {
 	if c.LLM.Model == "" {
 		c.LLM.Model = "gpt-4o"
 	}
-	if c.Environment.Image == "" {
+	if c.Environment.Type == "" {
+		c.Environment.Type = "local"
+	}
+	if c.Environment.Type == "docker" && c.Environment.Image == "" {
 		c.Environment.Image = DefaultGoConfig().Environment.Image
 	}
 	if len(c.Pipeline) == 0 {
@@ -109,8 +116,15 @@ func (c *Config) fillDefaults() {
 
 // validate は Config の内容を検証します。
 func (c *Config) validate() error {
-	if c.Environment.Image == "" {
-		return fmt.Errorf("environment.image must not be empty")
+	switch c.Environment.Type {
+	case "local", "nix":
+		// Image フィールドは不要。
+	case "docker":
+		if c.Environment.Image == "" {
+			return fmt.Errorf("environment.image must not be empty when environment.type is \"docker\"")
+		}
+	default:
+		return fmt.Errorf("environment.type must be one of \"local\", \"docker\", \"nix\"; got %q", c.Environment.Type)
 	}
 	if len(c.Pipeline) == 0 {
 		return fmt.Errorf("pipeline must contain at least one step")
