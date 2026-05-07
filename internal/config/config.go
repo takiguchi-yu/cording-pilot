@@ -36,6 +36,9 @@ type LLM struct {
 	Provider string `yaml:"provider"`
 	// Model は使用するモデル名です（例: "gpt-4o", "claude-3-5-sonnet-20240620"）。
 	Model string `yaml:"model"`
+	// AutoFixModel は自己修復フェーズで使用する軽量モデル名です（例: "gpt-4o-mini"）。
+	// 省略時は Model と同じ値が使用されます。
+	AutoFixModel string `yaml:"auto_fix_model,omitempty"`
 }
 
 // Environment は実行環境に関する設定を保持します。
@@ -68,6 +71,9 @@ type Config struct {
 	LLM LLM `yaml:"llm"`
 	// Environment は実行環境の設定です。
 	Environment Environment `yaml:"environment"`
+	// AutoFix は品質チェック実行直前の自動修復コマンドのリストです。
+	// 形式は Pipeline と同等です。失敗しても処理は続行します。
+	AutoFix []PipelineStep `yaml:"auto_fix"`
 	// Pipeline は順序が保証されたコマンドのリストです。
 	Pipeline []PipelineStep `yaml:"pipeline"`
 }
@@ -86,11 +92,16 @@ func DefaultGoConfig() *Config {
 			Reviewer: defaultReviewerPrompt,
 		},
 		LLM: LLM{
-			Provider: "copilot",
-			Model:    "gpt-4o",
+			Provider:     "copilot",
+			Model:        "gpt-4.1",
+			AutoFixModel: "gpt-5-mini",
 		},
 		Environment: Environment{
 			Image: "golangci/golangci-lint:latest",
+		},
+		AutoFix: []PipelineStep{
+			{Name: "tidy", Command: "go mod tidy"},
+			{Name: "goimports", Command: "goimports -w ."},
 		},
 		Pipeline: []PipelineStep{
 			{Name: "goimports", Command: "goimports -w ."},

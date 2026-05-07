@@ -78,7 +78,10 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 		}
 	}
 
-	// Step 2: initial pipeline run (expected Red — no implementation yet).
+	// Step 2a: auto_fix before initial pipeline run
+	s.runAutoFix(ctx, workDir, cfg)
+
+	// Step 2b: initial pipeline run (expected Red — no implementation yet).
 	initialOut, _, initialErr := s.runPipeline(ctx, workDir, cfg.Pipeline)
 	if initialErr != nil {
 		return nil, fmt.Errorf("implement: initial pipeline run: %w", initialErr)
@@ -122,6 +125,9 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 				return nil, fmt.Errorf("implement: write impl file: %w", writeErr)
 			}
 		}
+
+		// Auto-fix before running pipeline
+		s.runAutoFix(ctx, workDir, cfg)
 
 		out, success, pipeErr := s.runPipeline(ctx, workDir, cfg.Pipeline)
 		if pipeErr != nil {
@@ -200,6 +206,58 @@ func (s *ImplementState) runPipeline(ctx context.Context, workDir string, steps 
 		}
 	}
 	return sb.String(), true, nil
+}
+
+// runAutoFix は auto_fix ステップを順番に Executor で実行します。
+// いずれかのステップが失敗した場合でも、処理を続行（エラーを返さず、ログに出力）します。
+// 最終的な合否判定は後続の runPipeline に委ねられます。
+// cfg.LLM.AutoFixModel により、auto-fix フェーズで使用するモデルを指定できます。
+func (s *ImplementState) runAutoFix(ctx context.Context, workDir string, cfg *config.Config) {
+	if cfg == nil || len(cfg.AutoFix) == 0 {
+		return
+	}
+
+	if err := s.Logger.Info("implement.auto_fix_start",
+		fmt.Sprintf("自己修復フェーズを開始します (モデル: %s)", cfg.LLM.AutoFixModel)); err != nil {
+		// ログ出力エラーは無視して続行
+		return
+	}
+
+	for _, step := range cfg.AutoFix {
+		parts := strings.Fields(step.Command)
+		if len(parts) == 0 {
+			continue
+		}
+		cmd, args := parts[0], parts[1:]
+
+		out, success, execErr := s.Exec.Run(ctx, workDir, cmd, args...)
+		if execErr != nil {
+			// インフラエラーでもログに出力するが処理は続行
+			_ = s.Logger.Warn(
+				"implement.auto_fix_error",
+				fmt.Sprintf("auto_fix ステップ %q でインフラエラーが発生しましたが処理を続行します: %v\nOutput:\n%s", step.Name, execErr, out),
+			)
+			continue
+		}
+		if !success {
+			// ステップが失敗しても、エラーではなく info として出力
+			_ = s.Logger.Info(
+				"implement.auto_fix_step_failed",
+				fmt.Sprintf("auto_fix ステップ %q が失敗しましたが処理を続行します (最終判定は pipeline に委ねます)\n%s", step.Name, out),
+			)
+			continue
+		}
+		// 成功時もログ出力
+		_ = s.Logger.Debug(
+			"implement.auto_fix_step_success",
+			fmt.Sprintf("auto_fix ステップ %q が成功しました", step.Name),
+		)
+	}
+
+	if err := s.Logger.Info("implement.auto_fix_end", "自己修復フェーズが完了しました (結果は pipeline で最終判定されます)"); err != nil {
+		// ログ出力エラーは無視して続行
+		return
+	}
 }
 
 func (s *ImplementState) generateTestCode(ctx context.Context, wfCtx *Context) (agent.CodeGenerationResult, error) {

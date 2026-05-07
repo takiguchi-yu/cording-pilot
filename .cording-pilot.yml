@@ -4,7 +4,9 @@ llm:
   # 使用する LLM プロバイダー（現在対応: copilot）
   provider: "copilot"
   # 使用するモデル名
-  model: "gpt-4o"
+  model: "gpt-4.1"
+  # 自己修復フェーズで使用する軽量モデル名（省略時は model と同じ値を使用）
+  auto_fix_model: "gpt-5-mini"
 
 environment:
   # 実行環境の種類: local（デフォルト）, docker, nix
@@ -15,6 +17,13 @@ environment:
   # Docker コンテナ実行時に使用するイメージ（type: docker の場合のみ参照）。
   # golangci-lint イメージには go, golangci-lint, goimports が含まれています。
   image: "golangci/golangci-lint:latest"
+
+auto_fix:
+  - name: "tidy"
+    command: "go mod tidy"
+
+  - name: "goimports"
+    command: "goimports -w ."
 
 pipeline:
   - name: "format"
