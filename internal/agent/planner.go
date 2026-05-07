@@ -80,6 +80,8 @@ func (p *plannerAgentImpl) GenerateClarification(ctx context.Context, requiremen
 func (p *plannerAgentImpl) CompileIssue(ctx context.Context, requirement string, answers map[string]string, templateContent string) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("[COMPILE_ISSUE] 以下の要件とユーザーの回答を元に、実装計画（Markdown 形式の Issue）を生成してください。\n\n")
+	sb.WriteString("この Issue は、実装前にコードベース全体を確認して方針を決めるための設計文書として利用されます。\n")
+	sb.WriteString("そのため、既存実装との整合性を判断できる具体的な調査観点・影響範囲・方針決定基準を必ず含めてください。\n\n")
 	sb.WriteString("## 出力形式の要件\n\n")
 	sb.WriteString("**必ず以下の形式で出力してください：**\n\n")
 	sb.WriteString("1. 先頭行に Issue タイトルを `# <タイトル>` 形式で記述すること。\n")
@@ -87,6 +89,11 @@ func (p *plannerAgentImpl) CompileIssue(ctx context.Context, requirement string,
 	sb.WriteString("   - 例: `# ユーザー認証APIのJWT対応を実装する`\n\n")
 	sb.WriteString("2. タイトル行の後に空行を挟み、以下の Issue テンプレートの構成・見出しに厳密に従って本文を記述すること。\n\n")
 	sb.WriteString("3. **出力はMarkdownテキストをそのまま返すこと。コードブロック（\\`\\`\\`markdown や \\`\\`\\` など）で囲まないこと。**\n\n")
+	sb.WriteString("4. 本文には、コードベース全体を調査して実装方針を決定するための情報として、少なくとも以下を含めること。\n")
+	sb.WriteString("   - 影響範囲: 変更候補ディレクトリ/ファイル群、関連モジュール、依存関係\n")
+	sb.WriteString("   - 調査方針: 既存コードをどの順序・観点で確認するか\n")
+	sb.WriteString("   - 方針決定基準: どの条件で実装アプローチを選ぶか（例: 再利用優先、互換性維持、責務分離）\n")
+	sb.WriteString("   - 検証観点: 追加/修正すべきテスト観点と受け入れ条件\n\n")
 	sb.WriteString("## Issue テンプレート\n\n")
 	if strings.TrimSpace(templateContent) == "" {
 		sb.WriteString("(テンプレート未指定。一般的な見出し構成で Markdown の Issue を作成してください)\n\n")

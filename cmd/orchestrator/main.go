@@ -20,16 +20,19 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/takiguchi-yu/cording-pilot/internal/agent"
 	"github.com/takiguchi-yu/cording-pilot/internal/config"
 	"github.com/takiguchi-yu/cording-pilot/internal/executor"
 	githubpkg "github.com/takiguchi-yu/cording-pilot/internal/github"
 	"github.com/takiguchi-yu/cording-pilot/internal/llm"
+	"github.com/takiguchi-yu/cording-pilot/internal/tui"
 	"github.com/takiguchi-yu/cording-pilot/internal/workflow"
 	"github.com/takiguchi-yu/cording-pilot/pkg/logger"
 )
@@ -132,6 +135,26 @@ func run(requirement string, issueNumber int, issueURLOwner, issueURLRepo string
 	}
 	if issueURLRepo != "" {
 		repoName = issueURLRepo
+	}
+
+	// 自然言語入力のみで owner/repo を自動判定できない場合は、TUI で入力を受け付ける。
+	if ghClient != nil && requirement != "" && issueURLOwner == "" && issueURLRepo == "" {
+		if strings.TrimSpace(repoOwner) == "" || strings.TrimSpace(repoName) == "" {
+			if infoErr := log.Info("startup.github", "owner/repo を自動判定できなかったため、TUI で入力を受け付けます"); infoErr != nil {
+				return infoErr
+			}
+
+			inputOwner, inputRepo, inputErr := tui.RunRepoInput(repoOwner, repoName)
+			if inputErr != nil {
+				if errors.Is(inputErr, tui.ErrAborted) {
+					return fmt.Errorf("run: %w", tui.ErrAborted)
+				}
+				return fmt.Errorf("run: input owner/repo: %w", inputErr)
+			}
+
+			repoOwner = inputOwner
+			repoName = inputRepo
+		}
 	}
 
 	// ── Agent Factory ────────────────────────────────────────────────────────
