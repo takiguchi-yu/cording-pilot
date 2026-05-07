@@ -137,7 +137,7 @@ func jsonSchemaFromValue(v interface{}) map[string]interface{} {
 // OpenAI Structured Outputs の strict モードに対応するため、
 // すべてのオブジェクトに additionalProperties: false を付与します。
 func jsonSchemaFromType(t reflect.Type) map[string]interface{} {
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	switch t.Kind() {

@@ -6,10 +6,12 @@
 // 使い方:
 //
 //	orchestrator "<要件>"
+//	orchestrator --issue 12
 //
 // 使用例:
 //
 //	orchestrator "文字列を逆順にする関数"
+//	orchestrator --issue 42
 //
 // 実行ログはカレントディレクトリの run.ndjson に記録されます。
 package main
@@ -24,6 +26,7 @@ import (
 	"github.com/takiguchi-yu/cording-pilot/internal/agent"
 	"github.com/takiguchi-yu/cording-pilot/internal/config"
 	"github.com/takiguchi-yu/cording-pilot/internal/executor"
+	githubpkg "github.com/takiguchi-yu/cording-pilot/internal/github"
 	"github.com/takiguchi-yu/cording-pilot/internal/llm"
 	"github.com/takiguchi-yu/cording-pilot/internal/workflow"
 	"github.com/takiguchi-yu/cording-pilot/pkg/logger"
@@ -33,13 +36,18 @@ func main() {
 	useDocker := flag.Bool("docker", false, "ローカルの代わりに Docker Executor を使用する")
 	dockerImage := flag.String("docker-image", "", "Docker Executor で使用するイメージ（省略時は設定ファイルの image を使用）")
 	configPath := flag.String("config", config.DefaultConfigFileName, "プロジェクト設定ファイルのパス")
+	issueNumber := flag.Int("issue", 0, "処理する GitHub Issue 番号（指定時は要件引数を省略可）")
 	flag.Parse()
 
-	if flag.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, `Usage: orchestrator [--docker] [--docker-image IMAGE] [--config PATH] "<requirement>"`)
+	if flag.NArg() < 1 && *issueNumber == 0 {
+		fmt.Fprintln(os.Stderr, `Usage: orchestrator [--docker] [--docker-image IMAGE] [--config PATH] [--issue NUMBER] "<requirement>"`)
 		os.Exit(1)
 	}
-	requirement := flag.Arg(0)
+
+	requirement := ""
+	if flag.NArg() > 0 {
+		requirement = flag.Arg(0)
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -68,7 +76,7 @@ func main() {
 		}
 	}()
 
-	if runErr := run(requirement, logFile, exec, cfg); runErr != nil {
+	if runErr := run(requirement, *issueNumber, logFile, exec, cfg); runErr != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", runErr)
 		os.Exit(1)
 	}
@@ -76,7 +84,7 @@ func main() {
 
 // run は依存関係グラフ（DI コンテナー）を構築してワークフローを開始します。
 // main から分離することで、注入ロジックをテストで独立して検証できるようにしています。
-func run(requirement string, logDest *os.File, exec executor.Executor, cfg *config.Config) error {
+func run(requirement string, issueNumber int, logDest *os.File, exec executor.Executor, cfg *config.Config) error {
 	// ── Strategies ──────────────────────────────────────────────────────────
 	log := logger.New(logDest)
 
@@ -86,6 +94,9 @@ func run(requirement string, logDest *os.File, exec executor.Executor, cfg *conf
 		return fmt.Errorf("llm client: %w", err)
 	}
 
+	// ── GitHub クライアント（オプション） ──────────────────────────────────────
+	ghClient, ghToken, repoOwner, repoName, baseBranch := initGitHub(context.Background(), log)
+
 	// ── Agent Factory ────────────────────────────────────────────────────────
 	factory := agent.NewFactory(llmClient)
 	planner := factory.NewPlannerAgent()
@@ -94,7 +105,12 @@ func run(requirement string, logDest *os.File, exec executor.Executor, cfg *conf
 
 	// ── State Graph (wired bottom-up to avoid forward references) ────────────
 	completeState := &workflow.CompleteState{
-		Logger: log,
+		Logger:      log,
+		GitHub:      ghClient,
+		GitHubToken: ghToken,
+		RepoOwner:   repoOwner,
+		RepoName:    repoName,
+		BaseBranch:  baseBranch,
 	}
 
 	// ImplementState is referenced by both ReviewState (on rejection) and
@@ -123,15 +139,19 @@ func run(requirement string, logDest *os.File, exec executor.Executor, cfg *conf
 	}
 
 	interactiveState := &workflow.InteractiveState{
-		Planner: planner,
-		Logger:  log,
-		Next:    planState,
+		Planner:   planner,
+		Logger:    log,
+		Next:      planState,
+		GitHub:    ghClient,
+		RepoOwner: repoOwner,
+		RepoName:  repoName,
 	}
 
 	// ── Workflow Context ─────────────────────────────────────────────────────
 	wfCtx := &workflow.Context{
 		Requirement: requirement,
 		Config:      cfg,
+		IssueNumber: issueNumber,
 	}
 
 	// ── Runner ───────────────────────────────────────────────────────────────
@@ -152,4 +172,30 @@ func newLLMClient(cfg *config.Config, log *logger.Logger) (llm.Client, error) {
 	default:
 		return nil, fmt.Errorf("未対応の LLM プロバイダーです: %q (対応プロバイダー: copilot)", cfg.LLM.Provider)
 	}
+}
+
+// initGitHub は GITHUB_TOKEN を用いて GitHub クライアントとリポジトリ情報を初期化します。
+// GITHUB_TOKEN が未設定の場合は nil と空文字を返し、GitHub 連携をスキップします。
+func initGitHub(ctx context.Context, log *logger.Logger) (
+	client githubpkg.Client,
+	token, owner, repo, baseBranch string,
+) {
+	token = os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		_ = log.Info("startup.github", "GITHUB_TOKEN が未設定のため GitHub 連携をスキップします")
+		return nil, "", "", "", ""
+	}
+
+	info, err := githubpkg.DetectRepoInfo(ctx)
+	if err != nil {
+		_ = log.Info("startup.github", fmt.Sprintf("リポジトリ情報の取得に失敗しました（スキップ）: %v", err))
+		return nil, "", "", "", ""
+	}
+
+	base, err := githubpkg.DetectBaseBranch(ctx)
+	if err != nil {
+		base = "main"
+	}
+
+	return githubpkg.NewGitHubClient(token), token, info.Owner, info.Repo, base
 }

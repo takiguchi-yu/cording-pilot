@@ -22,4 +22,8 @@ type Context struct {
 	ReviewFeedback string
 	// Config は .cording-pilot.yml から読み込んだプロジェクト設定です。
 	Config *config.Config
+	// IssueNumber は対応する GitHub Issue 番号です。0 の場合は未設定を示します。
+	IssueNumber int
+	// BranchName は生成した作業ブランチ名です。Complete フェーズで設定されます。
+	BranchName string
 }
