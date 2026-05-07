@@ -44,7 +44,7 @@ func (s *ReviewState) Execute(ctx context.Context, wfCtx *Context) (State, error
 		return nil, err
 	}
 
-	if strings.Contains(strings.ToLower(feedback), "approve") {
+	if isApprovedFeedback(feedback) {
 		if err = s.Logger.Info("review.approved", "レビュー承認 → 完了フェーズへ移行します"); err != nil {
 			return nil, err
 		}
@@ -60,4 +60,20 @@ func (s *ReviewState) Execute(ctx context.Context, wfCtx *Context) (State, error
 	wfCtx.PlanText = fmt.Sprintf("%s\n\n## レビューフィードバック\n%s", wfCtx.PlanText, feedback)
 
 	return s.OnReject, nil
+}
+
+func isApprovedFeedback(feedback string) bool {
+	for _, line := range strings.Split(feedback, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		parts := strings.Fields(trimmed)
+		if len(parts) == 0 {
+			continue
+		}
+		first := strings.Trim(parts[0], ":.-")
+		return strings.EqualFold(first, "approve")
+	}
+	return false
 }

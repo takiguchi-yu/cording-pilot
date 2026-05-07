@@ -49,10 +49,18 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 		return nil, err
 	}
 
-	// Set up the isolated working directory.
+	// Set up the isolated working directory as a snapshot of the current repository.
 	workDir, err := os.MkdirTemp("", "cording-pilot-*")
 	if err != nil {
 		return nil, fmt.Errorf("implement: create work dir: %w", err)
+	}
+
+	repoRoot, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("implement: get repository root: %w", err)
+	}
+	if err = copyDir(repoRoot, workDir); err != nil {
+		return nil, fmt.Errorf("implement: snapshot repository: %w", err)
 	}
 	wfCtx.WorkDir = workDir
 

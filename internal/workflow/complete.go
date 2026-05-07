@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	githubpkg "github.com/takiguchi-yu/cording-pilot/internal/github"
@@ -100,11 +101,7 @@ func (s *CompleteState) pushAndCreatePR(ctx context.Context, wfCtx *Context) err
 	}
 
 	// ── 生成コードをコピー ────────────────────────────────────────────────────
-	destDir := filepath.Join(cloneDir, "generated")
-	if err = os.MkdirAll(destDir, 0o755); err != nil {
-		return fmt.Errorf("complete: mkdir generated: %w", err)
-	}
-	if err = copyDir(wfCtx.WorkDir, destDir); err != nil {
+	if err = copyDir(wfCtx.WorkDir, cloneDir); err != nil {
 		return fmt.Errorf("complete: copy generated files: %w", err)
 	}
 
@@ -178,7 +175,7 @@ func runGitCmd(ctx context.Context, dir string, args ...string) error {
 }
 
 // copyDir は src ディレクトリの内容を dst ディレクトリへ再帰的にコピーします。
-// go.mod はスキップします（clone 先の go.mod を上書きしないため）。
+// VCS 管理用ディレクトリ（.git と .worktrees）はスキップします。
 func copyDir(src, dst string) error {
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -190,8 +187,16 @@ func copyDir(src, dst string) error {
 			return fmt.Errorf("copyDir: rel path: %w", err)
 		}
 
-		// go.mod は clone 先のものを維持する。
-		if rel == "go.mod" {
+		if rel == ".git" || strings.HasPrefix(rel, ".git/") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if rel == ".worktrees" || strings.HasPrefix(rel, ".worktrees/") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 

@@ -131,7 +131,6 @@ func (s *InteractiveState) fetchIssue(ctx context.Context, wfCtx *Context) (Stat
 }
 
 // maybeCreateIssue は GitHub クライアントが設定されている場合に Issue を作成します。
-// エラーが発生した場合は警告ログを出力しますが、ワークフローは継続します。
 func (s *InteractiveState) maybeCreateIssue(ctx context.Context, wfCtx *Context) error {
 	if s.GitHub == nil || wfCtx.IssueNumber > 0 {
 		return nil
@@ -140,9 +139,10 @@ func (s *InteractiveState) maybeCreateIssue(ctx context.Context, wfCtx *Context)
 	title, body := splitIssueText(wfCtx.Requirement)
 	issue, err := s.GitHub.CreateIssue(ctx, s.RepoOwner, s.RepoName, title, body)
 	if err != nil {
-		// Issue 作成失敗はワークフローを停止しない（警告のみ）。
-		_ = s.Logger.Info("interactive.issue_create_warn", fmt.Sprintf("Issue の作成に失敗しました（スキップ）: %v", err))
-		return nil
+		if logErr := s.Logger.Warn("interactive.issue_create_failed", fmt.Sprintf("Issue の作成に失敗しました: %v", err)); logErr != nil {
+			return logErr
+		}
+		return fmt.Errorf("interactive: create issue: %w", err)
 	}
 
 	wfCtx.IssueNumber = issue.Number

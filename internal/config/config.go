@@ -93,6 +93,7 @@ func DefaultGoConfig() *Config {
 			Image: "golangci/golangci-lint:latest",
 		},
 		Pipeline: []PipelineStep{
+			{Name: "goimports", Command: "goimports -w ."},
 			{Name: "format", Command: "go fmt ./..."},
 			{Name: "typecheck", Command: "go build ./..."},
 			{Name: "lint", Command: "golangci-lint run"},
