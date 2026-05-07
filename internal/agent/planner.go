@@ -60,13 +60,16 @@ func (p *plannerAgentImpl) GenerateClarification(ctx context.Context, requiremen
 
 ---
 
-[CLARIFY] 以下の要件を分析し、実装前に確認すべき事項を JSON で返してください。
-要件が十分に明確な場合は is_clear を true に設定し、questions を空にしてください。
+[CLARIFY] 以下の要件を分析し、実装品質を高めるために確認すべき事項を JSON で返してください。
+要件の有無に関わらず、3〜5 件の確認質問（言語・エラーハンドリング・境界条件・テスト方針など）を必ず生成してください。
+要件が全く提供されていない場合のみ is_clear を false に設定し、requirements が提供されている場合は is_clear は常に false としてください。
 
 要件:
 %s`, p.systemPrompt, requirement)
 
 	var result ClarificationRequest
+	// 注意: LLM が is_clear=true のまま questions を空で返すと TUI がスキップされるため、
+	// IsClear は参照せず len(Questions) のみを判定基準とする（interactive.go 側の仕様）。
 	if err := p.llm.GenerateStructured(ctx, prompt, &result); err != nil {
 		return ClarificationRequest{}, fmt.Errorf("planner: generate clarification: %w", err)
 	}
@@ -83,6 +86,7 @@ func (p *plannerAgentImpl) CompileIssue(ctx context.Context, requirement string,
 	sb.WriteString("   - タイトルはテンプレートのセクション名（例：概要、目的・背景）ではなく、このIssueで何をするかが一目でわかる具体的・簡潔な文言（50文字以内）にすること。\n")
 	sb.WriteString("   - 例: `# ユーザー認証APIのJWT対応を実装する`\n\n")
 	sb.WriteString("2. タイトル行の後に空行を挟み、以下の Issue テンプレートの構成・見出しに厳密に従って本文を記述すること。\n\n")
+	sb.WriteString("3. **出力はMarkdownテキストをそのまま返すこと。コードブロック（\\`\\`\\`markdown や \\`\\`\\` など）で囲まないこと。**\n\n")
 	sb.WriteString("## Issue テンプレート\n\n")
 	if strings.TrimSpace(templateContent) == "" {
 		sb.WriteString("(テンプレート未指定。一般的な見出し構成で Markdown の Issue を作成してください)\n\n")
@@ -102,7 +106,28 @@ func (p *plannerAgentImpl) CompileIssue(ctx context.Context, requirement string,
 	if err != nil {
 		return "", fmt.Errorf("planner: compile issue: %w", err)
 	}
-	return resp, nil
+	return stripOuterCodeFence(resp), nil
+}
+
+// stripOuterCodeFence は LLM が誤って ```markdown や ``` で全体を囲んだ場合にフェンスを除去します。
+func stripOuterCodeFence(s string) string {
+	trimmed := strings.TrimSpace(s)
+	// ``` または ```markdown で始まる場合のみ除去する
+	for _, prefix := range []string{"```markdown", "```"} {
+		if strings.HasPrefix(trimmed, prefix) {
+			rest := strings.TrimPrefix(trimmed, prefix)
+			// 先頭の言語指定行（改行まで）を除去する
+			if idx := strings.Index(rest, "\n"); idx >= 0 {
+				rest = rest[idx+1:]
+			}
+			// 末尾の ``` を除去する
+			if strings.HasSuffix(strings.TrimSpace(rest), "```") {
+				rest = rest[:strings.LastIndex(rest, "```")]
+			}
+			return strings.TrimSpace(rest)
+		}
+	}
+	return s
 }
 
 // NewPlannerAgent は要件の不足を分析して対話的に要件を確定する計画エージェントを生成します。

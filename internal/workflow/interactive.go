@@ -84,8 +84,10 @@ func (s *InteractiveState) Execute(ctx context.Context, wfCtx *Context) (State, 
 		return nil, fmt.Errorf("interactive: generate clarification: %w", err)
 	}
 
-	// ── Step 2: 要件が十分明確な場合は TUI をスキップ ────────────────────────────
-	if clarification.IsClear || len(clarification.Questions) == 0 {
+	// ── Step 2: 質問が生成されなかった場合のみ TUI をスキップ ───────────────────────
+	// IsClear は参照しない。自然言語が渡された場合でも必ずヒアリングを実施するため、
+	// LLM が質問を生成しなかった（Questions が空）ときのみスキップする。
+	if len(clarification.Questions) == 0 {
 		if err = s.Logger.Info("interactive.skip", "要件が十分明確なため、ヒアリングをスキップします"); err != nil {
 			return nil, err
 		}
