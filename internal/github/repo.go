@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 )
 
@@ -13,6 +14,52 @@ type RepoInfo struct {
 	Owner string
 	// Repo はリポジトリ名です。
 	Repo string
+}
+
+var githubRemotePattern = regexp.MustCompile(`^(?:git@github\.com:|https://github\.com/)([^/]+)/([^/]+?)(?:\.git)?$`)
+
+var issueURLPattern = regexp.MustCompile(`^https://github\.com/([^/]+)/([^/]+)/issues/(\d+)$`)
+
+// IssueRef は GitHub Issue URL から抽出したリポジトリ情報と Issue 番号を保持します。
+type IssueRef struct {
+	// Owner はリポジトリのオーナー名です。
+	Owner string
+	// Repo はリポジトリ名です。
+	Repo string
+	// Number は Issue 番号です。
+	Number int
+}
+
+// ParseIssueURL は GitHub Issue URL（https://github.com/owner/repo/issues/N）を
+// パースして IssueRef を返します。URL が対応フォーマットでない場合はエラーを返します。
+func ParseIssueURL(rawURL string) (*IssueRef, error) {
+	matches := issueURLPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
+	if len(matches) != 4 {
+		return nil, fmt.Errorf("github: parse issue URL: unsupported issue URL format: %q", rawURL)
+	}
+
+	var number int
+	if _, err := fmt.Sscan(matches[3], &number); err != nil {
+		return nil, fmt.Errorf("github: parse issue URL: invalid issue number %q: %w", matches[3], err)
+	}
+
+	return &IssueRef{Owner: matches[1], Repo: matches[2], Number: number}, nil
+}
+
+// GetRepoInfo はカレントディレクトリの git origin リモート URL から
+// リポジトリの owner と repo を抽出します。
+func GetRepoInfo() (owner string, repo string, err error) {
+	out, err := exec.Command("git", "remote", "get-url", "origin").Output()
+	if err != nil {
+		return "", "", fmt.Errorf("github: get repo info: git remote get-url origin: %w", err)
+	}
+
+	info, err := parseRemoteURL(strings.TrimSpace(string(out)))
+	if err != nil {
+		return "", "", fmt.Errorf("github: get repo info: %w", err)
+	}
+
+	return info.Owner, info.Repo, nil
 }
 
 // DetectRepoInfo はカレントディレクトリの git リモート URL からオーナーとリポジトリ名を抽出します。
@@ -39,28 +86,10 @@ func DetectBaseBranch(ctx context.Context) (string, error) {
 // parseRemoteURL はリモート URL をパースして RepoInfo を返します。
 // SSH 形式と HTTPS 形式の両方に対応します。
 func parseRemoteURL(rawURL string) (*RepoInfo, error) {
-	url := strings.TrimSuffix(rawURL, ".git")
-
-	// SSH 形式: git@github.com:owner/repo
-	if strings.HasPrefix(url, "git@") {
-		parts := strings.SplitN(url, ":", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("github: parse remote URL: unexpected SSH URL format: %q", rawURL)
-		}
-		ownerRepo := strings.SplitN(parts[1], "/", 2)
-		if len(ownerRepo) != 2 {
-			return nil, fmt.Errorf("github: parse remote URL: unexpected path in SSH URL: %q", parts[1])
-		}
-		return &RepoInfo{Owner: ownerRepo[0], Repo: ownerRepo[1]}, nil
+	matches := githubRemotePattern.FindStringSubmatch(strings.TrimSpace(rawURL))
+	if len(matches) != 3 {
+		return nil, fmt.Errorf("github: parse remote URL: unsupported remote URL format: %q", rawURL)
 	}
 
-	// HTTPS 形式: https://github.com/owner/repo
-	parts := strings.Split(url, "/")
-	if len(parts) < 2 {
-		return nil, fmt.Errorf("github: parse remote URL: unexpected HTTPS URL format: %q", rawURL)
-	}
-	return &RepoInfo{
-		Owner: parts[len(parts)-2],
-		Repo:  parts[len(parts)-1],
-	}, nil
+	return &RepoInfo{Owner: matches[1], Repo: matches[2]}, nil
 }

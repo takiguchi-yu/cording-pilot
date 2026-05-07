@@ -59,18 +59,21 @@ var mockClarificationResult = mockClarificationResultType{
 	},
 }
 
-const mockCompiledIssue = `## 実装計画（ユーザー回答を反映）
+const mockCompiledIssue = `# 文字列を逆順にする関数を実装する
 
-### 概要
+## 概要 (Overview)
+
 ユーザーのヒアリング結果を元に要件を確定しました。
 
-### 仕様
+## 要件・仕様 (Requirements)
+
 - 入力: 任意の文字列（UTF-8）
 - 出力: UTF-8文字単位で逆順にした文字列
 - エッジケース: 空文字、1文字、マルチバイト文字
 - テストコード: あり
 
-### 影響範囲
+## 制約事項・影響範囲 (Constraints/Impact)
+
 - 新規ファイル: task.go / task_test.go`
 
 const mockTestCodeContent = `package task

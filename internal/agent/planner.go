@@ -76,8 +76,13 @@ func (p *plannerAgentImpl) GenerateClarification(ctx context.Context, requiremen
 // CompileIssue implements PlannerAgent.
 func (p *plannerAgentImpl) CompileIssue(ctx context.Context, requirement string, answers map[string]string, templateContent string) (string, error) {
 	var sb strings.Builder
-	sb.WriteString("[COMPILE_ISSUE] 以下の要件とユーザーの回答を元に、実装計画（Markdown 形式の擬似 Issue）を生成してください。\n")
-	sb.WriteString("以下の Issue テンプレートの構成・見出しに厳密に従って出力してください。\n\n")
+	sb.WriteString("[COMPILE_ISSUE] 以下の要件とユーザーの回答を元に、実装計画（Markdown 形式の Issue）を生成してください。\n\n")
+	sb.WriteString("## 出力形式の要件\n\n")
+	sb.WriteString("**必ず以下の形式で出力してください：**\n\n")
+	sb.WriteString("1. 先頭行に Issue タイトルを `# <タイトル>` 形式で記述すること。\n")
+	sb.WriteString("   - タイトルはテンプレートのセクション名（例：概要、目的・背景）ではなく、このIssueで何をするかが一目でわかる具体的・簡潔な文言（50文字以内）にすること。\n")
+	sb.WriteString("   - 例: `# ユーザー認証APIのJWT対応を実装する`\n\n")
+	sb.WriteString("2. タイトル行の後に空行を挟み、以下の Issue テンプレートの構成・見出しに厳密に従って本文を記述すること。\n\n")
 	sb.WriteString("## Issue テンプレート\n\n")
 	if strings.TrimSpace(templateContent) == "" {
 		sb.WriteString("(テンプレート未指定。一般的な見出し構成で Markdown の Issue を作成してください)\n\n")

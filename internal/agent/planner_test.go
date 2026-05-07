@@ -109,6 +109,9 @@ func TestFactory_NewPlannerAgent_CompileIssue_成功(t *testing.T) {
 	if !strings.Contains(stub.lastPrompt, "## Overview") {
 		t.Errorf("prompt should include template content; got %q", stub.lastPrompt)
 	}
+	if !strings.Contains(stub.lastPrompt, "# <タイトル>") {
+		t.Errorf("prompt should include title generation instruction; got %q", stub.lastPrompt)
+	}
 }
 
 func TestFactory_NewPlannerAgent_CompileIssue_LLMエラー時にエラーを返す(t *testing.T) {
