@@ -233,13 +233,131 @@ func (s *InteractiveState) maybeCreateIssue(ctx context.Context, wfCtx *Context)
 	)
 }
 
-// splitIssueText は Markdown テキストの先頭行をタイトル、残りを本文として分割します。
-// 先頭行の Markdown 見出し記号（#）は除去されます。
+// splitIssueText は Markdown テキストから Issue タイトルと本文を分割します。
+// 先頭の H1 見出し（# title）がある場合はタイトルに採用し、残りを本文にします。
+// H1 がない場合は本文の内容からタイトルを推定し、本文はそのまま使用します。
 func splitIssueText(text string) (title, body string) {
-	lines := strings.SplitN(text, "\n", 2)
-	title = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(lines[0]), "#"))
-	if len(lines) > 1 {
-		body = strings.TrimSpace(lines[1])
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return "実装タスク", ""
 	}
-	return
+
+	if h1Title, h1Body, ok := splitByLeadingH1(trimmed); ok {
+		return h1Title, h1Body
+	}
+
+	return deriveIssueTitle(trimmed), trimmed
+}
+
+func splitByLeadingH1(text string) (title, body string, ok bool) {
+	lines := strings.Split(text, "\n")
+	firstLineIdx := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			firstLineIdx = i
+			break
+		}
+	}
+
+	if firstLineIdx < 0 {
+		return "", "", false
+	}
+
+	firstLine := strings.TrimSpace(lines[firstLineIdx])
+	if !strings.HasPrefix(firstLine, "# ") {
+		return "", "", false
+	}
+
+	title = strings.TrimSpace(strings.TrimPrefix(firstLine, "# "))
+	body = strings.TrimSpace(strings.Join(lines[firstLineIdx+1:], "\n"))
+	if title == "" {
+		return "", "", false
+	}
+
+	return title, body, true
+}
+
+func deriveIssueTitle(text string) string {
+	if firstContent := firstMeaningfulLine(text); firstContent != "" {
+		return truncateRunes(firstContent, 80)
+	}
+
+	return "実装タスク"
+}
+
+func firstMeaningfulLine(text string) string {
+	lines := strings.Split(text, "\n")
+	inComment := false
+	inCodeFence := false
+
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+
+		if strings.HasPrefix(line, "```") {
+			inCodeFence = !inCodeFence
+			continue
+		}
+		if inCodeFence {
+			continue
+		}
+
+		if inComment {
+			if strings.Contains(line, "-->") {
+				inComment = false
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "<!--") {
+			if !strings.Contains(line, "-->") {
+				inComment = true
+			}
+			continue
+		}
+
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") || strings.HasPrefix(line, "+ ") {
+			line = strings.TrimSpace(line[2:])
+		}
+
+		if trimmed, ok := trimOrderedListPrefix(line); ok {
+			line = trimmed
+		}
+
+		line = strings.TrimSpace(strings.Trim(line, "*_`>"))
+		if line == "" {
+			continue
+		}
+
+		return line
+	}
+
+	return ""
+}
+
+func trimOrderedListPrefix(line string) (string, bool) {
+	i := 0
+	for i < len(line) && line[i] >= '0' && line[i] <= '9' {
+		i++
+	}
+	if i == 0 || i+1 >= len(line) || line[i] != '.' || line[i+1] != ' ' {
+		return line, false
+	}
+	return strings.TrimSpace(line[i+2:]), true
+}
+
+func truncateRunes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max])
 }

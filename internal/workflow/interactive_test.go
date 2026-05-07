@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/takiguchi-yu/cording-pilot/internal/agent"
+	githubpkg "github.com/takiguchi-yu/cording-pilot/internal/github"
 	"github.com/takiguchi-yu/cording-pilot/internal/tui"
 	"github.com/takiguchi-yu/cording-pilot/internal/workflow"
 )
@@ -135,5 +136,111 @@ func TestInteractiveState_ユーザー中断時にErrAbortedを返す(t *testing
 	_, err := s.Execute(context.Background(), &workflow.Context{Requirement: "要件"})
 	if !errors.Is(err, tui.ErrAborted) {
 		t.Errorf("expected wrapped error %v; got %v", tui.ErrAborted, err)
+	}
+}
+
+func TestInteractiveState_Issue作成時にH1がない場合は本文からタイトルを推定する(t *testing.T) {
+	t.Parallel()
+
+	const compiled = "## 概要\n\nIssue 作成時に適切なタイトルが設定されるようにする。\n\n## 受け入れ条件\n\n- 先頭のセクション見出しはタイトルにしない"
+
+	stub := &stubPlannerAgent{
+		clarification: agent.ClarificationRequest{IsClear: true},
+		compiledIssue: compiled,
+	}
+
+	var gotTitle string
+	var gotBody string
+
+	s := &workflow.InteractiveState{
+		Planner: stub,
+		Logger:  newLogger(),
+		Next:    &workflow.PlanState{Planner: &stubPlannerAgent{}, Logger: newLogger()},
+		GitHub: &githubpkg.MockClient{
+			GetIssueFunc: func(context.Context, string, string, int) (*githubpkg.Issue, error) {
+				return nil, nil
+			},
+			CreateIssueFunc: func(_ context.Context, _, _, title, body string) (*githubpkg.Issue, error) {
+				gotTitle = title
+				gotBody = body
+				return &githubpkg.Issue{Number: 10, Title: title, Body: body}, nil
+			},
+			CreatePullRequestFunc: func(context.Context, string, string, string, string, string, string) (*githubpkg.PullRequest, error) {
+				return nil, nil
+			},
+		},
+		RepoOwner: "owner",
+		RepoName:  "repo",
+		SelectIssueType: func() (string, error) {
+			return "feature", nil
+		},
+		LoadIssueTemplate: func(string) (string, error) {
+			return "", nil
+		},
+	}
+
+	wfCtx := &workflow.Context{Requirement: "要件"}
+	if _, err := s.Execute(context.Background(), wfCtx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotTitle != "Issue 作成時に適切なタイトルが設定されるようにする。" {
+		t.Errorf("unexpected title: %q", gotTitle)
+	}
+	if gotBody != compiled {
+		t.Errorf("unexpected body: %q", gotBody)
+	}
+}
+
+func TestInteractiveState_Issue作成時に先頭H1をタイトルとして使う(t *testing.T) {
+	t.Parallel()
+
+	const compiled = "# Issueタイトル\n\n## 概要\n\n本文"
+
+	stub := &stubPlannerAgent{
+		clarification: agent.ClarificationRequest{IsClear: true},
+		compiledIssue: compiled,
+	}
+
+	var gotTitle string
+	var gotBody string
+
+	s := &workflow.InteractiveState{
+		Planner: stub,
+		Logger:  newLogger(),
+		Next:    &workflow.PlanState{Planner: &stubPlannerAgent{}, Logger: newLogger()},
+		GitHub: &githubpkg.MockClient{
+			GetIssueFunc: func(context.Context, string, string, int) (*githubpkg.Issue, error) {
+				return nil, nil
+			},
+			CreateIssueFunc: func(_ context.Context, _, _, title, body string) (*githubpkg.Issue, error) {
+				gotTitle = title
+				gotBody = body
+				return &githubpkg.Issue{Number: 11, Title: title, Body: body}, nil
+			},
+			CreatePullRequestFunc: func(context.Context, string, string, string, string, string, string) (*githubpkg.PullRequest, error) {
+				return nil, nil
+			},
+		},
+		RepoOwner: "owner",
+		RepoName:  "repo",
+		SelectIssueType: func() (string, error) {
+			return "feature", nil
+		},
+		LoadIssueTemplate: func(string) (string, error) {
+			return "", nil
+		},
+	}
+
+	wfCtx := &workflow.Context{Requirement: "要件"}
+	if _, err := s.Execute(context.Background(), wfCtx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotTitle != "Issueタイトル" {
+		t.Errorf("unexpected title: %q", gotTitle)
+	}
+	if gotBody != "## 概要\n\n本文" {
+		t.Errorf("unexpected body: %q", gotBody)
 	}
 }
