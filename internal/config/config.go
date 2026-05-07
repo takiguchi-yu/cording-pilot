@@ -3,7 +3,9 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -11,6 +13,12 @@ import (
 
 // DefaultConfigFileName はプロジェクトルートに配置する設定ファイルのデフォルト名です。
 const DefaultConfigFileName = ".cording-pilot.yml"
+
+const (
+	defaultConfigVersion = "1.0"
+	defaultLLMProvider   = "copilot"
+	defaultLLMModel      = "gpt-4.1"
+)
 
 // Project はターゲット言語とテストフレームワークの設定を保持します。
 type Project struct {
@@ -81,7 +89,7 @@ type Config struct {
 // DefaultGoConfig は .cording-pilot.yml が存在しない場合に使用する Go 向けデフォルト設定です。
 func DefaultGoConfig() *Config {
 	return &Config{
-		Version: "1.0",
+		Version: defaultConfigVersion,
 		Project: Project{
 			Language:      "go",
 			TestFramework: "standard testing",
@@ -92,8 +100,8 @@ func DefaultGoConfig() *Config {
 			Reviewer: defaultReviewerPrompt,
 		},
 		LLM: LLM{
-			Provider:     "copilot",
-			Model:        "gpt-4.1",
+			Provider:     defaultLLMProvider,
+			Model:        defaultLLMModel,
 			AutoFixModel: "gpt-5-mini",
 		},
 		Environment: Environment{
@@ -143,8 +151,17 @@ func Load(path string) (*Config, error) {
 	}
 
 	var cfg Config
-	if err = yaml.Unmarshal(data, &cfg); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err = dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("config: parse yaml %q: %w", path, err)
+	}
+	var trailing any
+	if err = dec.Decode(&trailing); err != io.EOF {
+		if err != nil {
+			return nil, fmt.Errorf("config: parse yaml %q: %w", path, err)
+		}
+		return nil, fmt.Errorf("config: parse yaml %q: multiple YAML documents are not supported", path)
 	}
 
 	cfg.fillDefaults()
@@ -157,6 +174,9 @@ func Load(path string) (*Config, error) {
 
 // fillDefaults は設定ファイルの省略されたフィールドにデフォルト値を設定します。
 func (c *Config) fillDefaults() {
+	if c.Version == "" {
+		c.Version = defaultConfigVersion
+	}
 	if c.Project.Language == "" {
 		c.Project.Language = "go"
 	}
@@ -173,10 +193,13 @@ func (c *Config) fillDefaults() {
 		c.Agents.Reviewer = defaultReviewerPrompt
 	}
 	if c.LLM.Provider == "" {
-		c.LLM.Provider = "copilot"
+		c.LLM.Provider = defaultLLMProvider
 	}
 	if c.LLM.Model == "" {
-		c.LLM.Model = "gpt-4o"
+		c.LLM.Model = defaultLLMModel
+	}
+	if c.LLM.AutoFixModel == "" {
+		c.LLM.AutoFixModel = c.LLM.Model
 	}
 	if c.Environment.Type == "" {
 		c.Environment.Type = "local"
@@ -191,6 +214,13 @@ func (c *Config) fillDefaults() {
 
 // validate は Config の内容を検証します。
 func (c *Config) validate() error {
+	if c.Version != defaultConfigVersion {
+		return fmt.Errorf("version must be %q; got %q", defaultConfigVersion, c.Version)
+	}
+	if c.LLM.Provider != defaultLLMProvider {
+		return fmt.Errorf("llm.provider must be %q; got %q", defaultLLMProvider, c.LLM.Provider)
+	}
+
 	switch c.Environment.Type {
 	case "local", "nix":
 		// Image フィールドは不要。

@@ -28,6 +28,9 @@ func TestDefaultGoConfig_デフォルト値が正しく設定される(t *testin
 	if cfg.LLM.Model != "gpt-4.1" {
 		t.Errorf("LLM.Model=%q; want %q", cfg.LLM.Model, "gpt-4.1")
 	}
+	if cfg.LLM.AutoFixModel != "gpt-5-mini" {
+		t.Errorf("LLM.AutoFixModel=%q; want %q", cfg.LLM.AutoFixModel, "gpt-5-mini")
+	}
 	if len(cfg.Pipeline) == 0 {
 		t.Error("Pipeline should not be empty")
 	}
@@ -48,27 +51,26 @@ func TestLoad_ファイルが存在しない場合はデフォルト設定を返
 
 func TestLoad_有効なYAMLファイルを読み込む(t *testing.T) {
 	t.Parallel()
-	yaml := `version: "2.0"
-project:
-  language: python
-  test_framework: pytest
-llm:
-  provider: openai
-  model: gpt-4o-mini
-environment:
-  type: local
-pipeline:
-  - name: test
-    command: pytest
-`
+	yaml := "version: \"1.0\"\n" +
+		"project:\n" +
+		"  language: python\n" +
+		"  test_framework: pytest\n" +
+		"llm:\n" +
+		"  provider: copilot\n" +
+		"  model: gpt-4o-mini\n" +
+		"environment:\n" +
+		"  type: local\n" +
+		"pipeline:\n" +
+		"  - name: test\n" +
+		"    command: pytest\n"
 	path := writeTemp(t, yaml)
 
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("予期しないエラー: %v", err)
 	}
-	if cfg.Version != "2.0" {
-		t.Errorf("Version=%q; want %q", cfg.Version, "2.0")
+	if cfg.Version != "1.0" {
+		t.Errorf("Version=%q; want %q", cfg.Version, "1.0")
 	}
 	if cfg.Project.Language != "python" {
 		t.Errorf("Project.Language=%q; want %q", cfg.Project.Language, "python")
@@ -129,8 +131,54 @@ pipeline:
 	if cfg.LLM.Provider != "copilot" {
 		t.Errorf("fillDefaults: LLM.Provider=%q; want %q", cfg.LLM.Provider, "copilot")
 	}
+	if cfg.LLM.Model != "gpt-4.1" {
+		t.Errorf("fillDefaults: LLM.Model=%q; want %q", cfg.LLM.Model, "gpt-4.1")
+	}
+	if cfg.LLM.AutoFixModel != cfg.LLM.Model {
+		t.Errorf("fillDefaults: LLM.AutoFixModel=%q; want same as LLM.Model=%q", cfg.LLM.AutoFixModel, cfg.LLM.Model)
+	}
 	if cfg.Agents.Planner == "" {
 		t.Error("fillDefaults: Agents.Planner should not be empty")
+	}
+}
+
+func TestLoad_versionを省略するとデフォルト値が補完される(t *testing.T) {
+	t.Parallel()
+	yaml := `environment:
+  type: local
+pipeline:
+  - name: test
+    command: go test ./...
+`
+	path := writeTemp(t, yaml)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("予期しないエラー: %v", err)
+	}
+	if cfg.Version != "1.0" {
+		t.Errorf("fillDefaults: Version=%q; want %q", cfg.Version, "1.0")
+	}
+}
+
+func TestLoad_autoFixModelを省略するとmodelと同じ値が補完される(t *testing.T) {
+	t.Parallel()
+	yaml := `version: "1.0"
+llm:
+  provider: copilot
+  model: gpt-5-mini
+environment:
+  type: local
+pipeline:
+  - name: test
+    command: go test ./...
+`
+	path := writeTemp(t, yaml)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("予期しないエラー: %v", err)
+	}
+	if cfg.LLM.AutoFixModel != "gpt-5-mini" {
+		t.Errorf("fillDefaults: LLM.AutoFixModel=%q; want %q", cfg.LLM.AutoFixModel, "gpt-5-mini")
 	}
 }
 
@@ -173,6 +221,57 @@ pipeline:
 	_, err := config.Load(path)
 	if err == nil {
 		t.Fatal("不正な environment.type でエラーを期待しましたが nil でした")
+	}
+}
+
+func TestLoad_不正なllmProviderはエラーを返す(t *testing.T) {
+	t.Parallel()
+	yaml := `version: "1.0"
+llm:
+  provider: openai
+  model: gpt-4.1
+environment:
+  type: local
+pipeline:
+  - name: test
+    command: go test ./...
+`
+	path := writeTemp(t, yaml)
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("不正な llm.provider でエラーを期待しましたが nil でした")
+	}
+}
+
+func TestLoad_不正なversionはエラーを返す(t *testing.T) {
+	t.Parallel()
+	yaml := `version: "2.0"
+environment:
+  type: local
+pipeline:
+  - name: test
+    command: go test ./...
+`
+	path := writeTemp(t, yaml)
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("不正な version でエラーを期待しましたが nil でした")
+	}
+}
+
+func TestLoad_未知のキーがある場合はエラーを返す(t *testing.T) {
+	t.Parallel()
+	yaml := `version: "1.0"
+environmnt:
+  type: local
+pipeline:
+  - name: test
+    command: go test ./...
+`
+	path := writeTemp(t, yaml)
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("未知のキーでエラーを期待しましたが nil でした")
 	}
 }
 

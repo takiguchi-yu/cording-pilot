@@ -56,9 +56,20 @@ Implement では Executor 経由で品質チェックパイプラインを実行
 
 主な設定項目:
 
-- `llm.provider`, `llm.model`
+- `version`
+- `llm.provider`, `llm.model`, `llm.auto_fix_model`
 - `environment.type`, `environment.image`
+- `auto_fix`
 - `pipeline`（実行コマンド列）
+
+設定の実装仕様（internal/config）:
+
+- YAML デコードは `KnownFields(true)` で厳格化（未知キーはエラー）
+- 複数 YAML ドキュメントは非対応（単一ドキュメントのみ）
+- `version` は `"1.0"` を必須化（省略時は補完）
+- `llm.provider` は `"copilot"` のみ許可
+- `llm.model` のデフォルトは `"gpt-4.1"`
+- `llm.auto_fix_model` 省略時は `llm.model` を利用
 
 CLI フラグは一部設定を上書きします（例: `--docker`, `--nix`, `--docker-image`）。
 

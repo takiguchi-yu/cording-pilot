@@ -76,6 +76,39 @@ Nix を一時的に使う場合:
 go run ./cmd/orchestrator --nix "実装要件"
 ```
 
+## 設定ファイル（.cording-pilot.yml）
+
+設定ファイルは YAML として厳格に検証されます。
+
+- 未知のキー（typo を含む）があると起動時にエラーになります
+- 複数 YAML ドキュメント（`---` で区切られた複数定義）はサポートされません
+
+主な制約と補完ルール:
+
+- `version`: `"1.0"` のみ有効（省略時は `"1.0"` を補完）
+- `llm.provider`: 現在は `"copilot"` のみ有効
+- `llm.model`: 省略時は `"gpt-4.1"`
+- `llm.auto_fix_model`: 省略時は `llm.model` と同じ値を使用
+- `environment.type`: `local` / `docker` / `nix`
+- `environment.image`: `environment.type: docker` の場合に必須（省略時は既定イメージを補完）
+
+最小例:
+
+```yaml
+version: "1.0"
+
+llm:
+    provider: "copilot"
+    model: "gpt-4.1"
+
+environment:
+    type: "local"
+
+pipeline:
+    - name: "test"
+      command: "go test -v ./..."
+```
+
 ## 配布バイナリの使い方
 
 `main` へのマージ後、GitHub Releases に各 OS 向けバイナリが添付されます。
