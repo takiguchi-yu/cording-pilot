@@ -83,41 +83,41 @@ func (s *InteractiveState) Execute(ctx context.Context, wfCtx *Context) (State, 
 	if err != nil {
 		return nil, fmt.Errorf("interactive: generate clarification: %w", err)
 	}
+	questions := clarification.Questions
+	if len(questions) > 1 {
+		questions = questions[:1]
+		if err = s.Logger.Info("interactive.questions_trimmed", "確認事項は最大1件に制限されるため、先頭の質問のみを使用します"); err != nil {
+			return nil, err
+		}
+	}
+
+	answers := map[string]string{}
 
 	// ── Step 2: 質問が生成されなかった場合のみ TUI をスキップ ───────────────────────
 	// IsClear は参照しない。自然言語が渡された場合でも必ずヒアリングを実施するため、
 	// LLM が質問を生成しなかった（Questions が空）ときのみスキップする。
-	if len(clarification.Questions) == 0 {
+	if len(questions) == 0 {
 		if err = s.Logger.Info("interactive.skip", "要件が十分明確なため、ヒアリングをスキップします"); err != nil {
 			return nil, err
 		}
-		compiled, compileErr := s.Planner.CompileIssue(ctx, wfCtx.Requirement, map[string]string{}, templateContent)
-		if compileErr != nil {
-			return nil, fmt.Errorf("interactive: compile issue: %w", compileErr)
-		}
-		wfCtx.Requirement = compiled
-		if err = s.maybeCreateIssue(ctx, wfCtx); err != nil {
+	} else {
+		if err = s.Logger.Info("interactive.questions", fmt.Sprintf("%d 件の確認事項を生成しました", len(questions))); err != nil {
 			return nil, err
 		}
-		return s.Next, nil
-	}
 
-	if err = s.Logger.Info("interactive.questions", fmt.Sprintf("%d 件の確認事項を生成しました", len(clarification.Questions))); err != nil {
-		return nil, err
-	}
-
-	// ── Step 3: TUI フォームでユーザーへヒアリング ─────────────────────────────
-	// TUI の入力待機は context.Background() で行い、LLM タイムアウトの影響を受けないようにします。
-	answers, err := tui.RunForm(clarification.Questions)
-	if err != nil {
-		if errors.Is(err, tui.ErrAborted) {
-			return nil, fmt.Errorf("interactive: %w", tui.ErrAborted)
+		// ── Step 3: TUI フォームでユーザーへヒアリング ─────────────────────────────
+		// TUI の入力待機は context.Background() で行い、LLM タイムアウトの影響を受けないようにします。
+		answers, err = tui.RunForm(questions)
+		if err != nil {
+			if errors.Is(err, tui.ErrAborted) {
+				return nil, fmt.Errorf("interactive: %w", tui.ErrAborted)
+			}
+			return nil, fmt.Errorf("interactive: form: %w", err)
 		}
-		return nil, fmt.Errorf("interactive: form: %w", err)
-	}
 
-	if err = s.Logger.Info("interactive.answers_collected", fmt.Sprintf("%d 件の回答を収集しました", len(answers))); err != nil {
-		return nil, err
+		if err = s.Logger.Info("interactive.answers_collected", fmt.Sprintf("%d 件の回答を収集しました", len(answers))); err != nil {
+			return nil, err
+		}
 	}
 
 	// ── Step 4: 回答を元に最終的な実装計画（Issue）をコンパイル ─────────────────

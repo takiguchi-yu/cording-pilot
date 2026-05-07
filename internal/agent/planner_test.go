@@ -13,11 +13,12 @@ import (
 
 // plannerStubLLM は PlannerAgent のテスト用 LLM スタブです。
 type plannerStubLLM struct {
-	clarification agent.ClarificationRequest
-	compiledIssue string
-	generateErr   error
-	structuredErr error
-	lastPrompt    string
+	clarification        agent.ClarificationRequest
+	compiledIssue        string
+	generateErr          error
+	structuredErr        error
+	lastPrompt           string
+	lastStructuredPrompt string
 }
 
 func (s *plannerStubLLM) Generate(_ context.Context, prompt string) (string, error) {
@@ -25,7 +26,8 @@ func (s *plannerStubLLM) Generate(_ context.Context, prompt string) (string, err
 	return s.compiledIssue, s.generateErr
 }
 
-func (s *plannerStubLLM) GenerateStructured(_ context.Context, _ string, target interface{}) error {
+func (s *plannerStubLLM) GenerateStructured(_ context.Context, prompt string, target interface{}) error {
+	s.lastStructuredPrompt = prompt
 	if s.structuredErr != nil {
 		return s.structuredErr
 	}
@@ -34,6 +36,36 @@ func (s *plannerStubLLM) GenerateStructured(_ context.Context, _ string, target 
 		return err
 	}
 	return json.Unmarshal(data, target)
+}
+
+func TestFactory_NewPlannerAgent_GenerateClarification_質問は最大1件に制限される(t *testing.T) {
+	t.Parallel()
+
+	stub := &plannerStubLLM{clarification: agent.ClarificationRequest{
+		Questions: []agent.Question{
+			{ID: "q1", Text: "入力と出力の仕様は?", Type: "text"},
+			{ID: "q2", Text: "空文字の扱いは?", Type: "text"},
+		},
+	}}
+	f := agent.NewFactory(stub, config.DefaultGoConfig())
+	pa := f.NewPlannerAgent()
+
+	got, err := pa.GenerateClarification(context.Background(), "文字列を逆順にする関数")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got.Questions) != 1 {
+		t.Fatalf("questions=%d; want 1", len(got.Questions))
+	}
+	if got.Questions[0].ID != "q1" {
+		t.Errorf("unexpected first question id: %q", got.Questions[0].ID)
+	}
+	if got.IsClear {
+		t.Error("IsClear should be false when a question exists")
+	}
+	if !strings.Contains(stub.lastStructuredPrompt, "最大 1 件") {
+		t.Errorf("clarify prompt should contain max-one-question instruction; got %q", stub.lastStructuredPrompt)
+	}
 }
 
 func TestFactory_NewPlannerAgent_GenerateClarification_質問あり(t *testing.T) {

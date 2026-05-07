@@ -11,3 +11,9 @@ var ExportJSONSchemaFromType = jsonSchemaFromType
 // ExportSanitizeJSONResponse はテスト専用のエクスポートラッパーです。
 // sanitizeJSONResponse を package 外部から呼び出せるようにします。
 var ExportSanitizeJSONResponse = sanitizeJSONResponse
+
+// ExportExtractWaitSeconds はテスト専用のエクスポートラッパーです。
+var ExportExtractWaitSeconds = extractWaitSeconds
+
+// ExportIsDailyLimitMessage はテスト専用のエクスポートラッパーです。
+var ExportIsDailyLimitMessage = isDailyLimitMessage

@@ -47,6 +47,33 @@ type LLM struct {
 	// AutoFixModel は自己修復フェーズで使用する軽量モデル名です（例: "gpt-4o-mini"）。
 	// 省略時は Model と同じ値が使用されます。
 	AutoFixModel string `yaml:"auto_fix_model,omitempty"`
+	// PlannerClarificationModel は Interactive の質問生成で使用するモデル名です。
+	PlannerClarificationModel string `yaml:"planner_clarification_model,omitempty"`
+	// PlannerPlanModel は Plan/CompileIssue で使用するモデル名です。
+	PlannerPlanModel string `yaml:"planner_plan_model,omitempty"`
+	// CoderModel は実装フェーズ（構造化出力）で使用するモデル名です。
+	CoderModel string `yaml:"coder_model,omitempty"`
+	// ReviewerModel はレビューフェーズで使用するモデル名です。
+	ReviewerModel string `yaml:"reviewer_model,omitempty"`
+	// Retry は LLM 呼び出し時のリトライ設定です。
+	Retry LLMRetry `yaml:"retry,omitempty"`
+	// RateLimit は 429 応答時の制御設定です。
+	RateLimit LLMRateLimit `yaml:"rate_limit,omitempty"`
+}
+
+// LLMRetry は LLM 呼び出し時の再試行ポリシーです。
+type LLMRetry struct {
+	Attempts       int     `yaml:"attempts,omitempty"`
+	InitialDelayMS int     `yaml:"initial_delay_ms,omitempty"`
+	Multiplier     float64 `yaml:"multiplier,omitempty"`
+}
+
+// LLMRateLimit は 429 応答時の制御設定です。
+type LLMRateLimit struct {
+	// Mode は fail_fast または honor_wait のいずれかです。
+	Mode string `yaml:"mode,omitempty"`
+	// MaxWaitSeconds は honor_wait 時に許容する待機秒数の上限です。
+	MaxWaitSeconds int `yaml:"max_wait_seconds,omitempty"`
 }
 
 // Environment は実行環境に関する設定を保持します。
@@ -100,9 +127,22 @@ func DefaultGoConfig() *Config {
 			Reviewer: defaultReviewerPrompt,
 		},
 		LLM: LLM{
-			Provider:     defaultLLMProvider,
-			Model:        defaultLLMModel,
-			AutoFixModel: "gpt-5-mini",
+			Provider:                  defaultLLMProvider,
+			Model:                     defaultLLMModel,
+			AutoFixModel:              "gpt-5-mini",
+			PlannerClarificationModel: defaultLLMModel,
+			PlannerPlanModel:          defaultLLMModel,
+			CoderModel:                defaultLLMModel,
+			ReviewerModel:             defaultLLMModel,
+			Retry: LLMRetry{
+				Attempts:       3,
+				InitialDelayMS: 500,
+				Multiplier:     2.0,
+			},
+			RateLimit: LLMRateLimit{
+				Mode:           "fail_fast",
+				MaxWaitSeconds: 30,
+			},
 		},
 		Environment: Environment{
 			Image: "golangci/golangci-lint:latest",
@@ -201,6 +241,33 @@ func (c *Config) fillDefaults() {
 	if c.LLM.AutoFixModel == "" {
 		c.LLM.AutoFixModel = c.LLM.Model
 	}
+	if c.LLM.PlannerClarificationModel == "" {
+		c.LLM.PlannerClarificationModel = c.LLM.Model
+	}
+	if c.LLM.PlannerPlanModel == "" {
+		c.LLM.PlannerPlanModel = c.LLM.Model
+	}
+	if c.LLM.CoderModel == "" {
+		c.LLM.CoderModel = c.LLM.Model
+	}
+	if c.LLM.ReviewerModel == "" {
+		c.LLM.ReviewerModel = c.LLM.Model
+	}
+	if c.LLM.Retry.Attempts == 0 {
+		c.LLM.Retry.Attempts = 3
+	}
+	if c.LLM.Retry.InitialDelayMS == 0 {
+		c.LLM.Retry.InitialDelayMS = 500
+	}
+	if c.LLM.Retry.Multiplier == 0 {
+		c.LLM.Retry.Multiplier = 2.0
+	}
+	if c.LLM.RateLimit.Mode == "" {
+		c.LLM.RateLimit.Mode = "fail_fast"
+	}
+	if c.LLM.RateLimit.MaxWaitSeconds == 0 {
+		c.LLM.RateLimit.MaxWaitSeconds = 30
+	}
 	if c.Environment.Type == "" {
 		c.Environment.Type = "local"
 	}
@@ -219,6 +286,23 @@ func (c *Config) validate() error {
 	}
 	if c.LLM.Provider != defaultLLMProvider {
 		return fmt.Errorf("llm.provider must be %q; got %q", defaultLLMProvider, c.LLM.Provider)
+	}
+	if c.LLM.Retry.Attempts < 1 {
+		return fmt.Errorf("llm.retry.attempts must be >= 1; got %d", c.LLM.Retry.Attempts)
+	}
+	if c.LLM.Retry.InitialDelayMS < 0 {
+		return fmt.Errorf("llm.retry.initial_delay_ms must be >= 0; got %d", c.LLM.Retry.InitialDelayMS)
+	}
+	if c.LLM.Retry.Multiplier < 1.0 {
+		return fmt.Errorf("llm.retry.multiplier must be >= 1.0; got %v", c.LLM.Retry.Multiplier)
+	}
+	switch c.LLM.RateLimit.Mode {
+	case "fail_fast", "honor_wait":
+	default:
+		return fmt.Errorf("llm.rate_limit.mode must be one of \"fail_fast\", \"honor_wait\"; got %q", c.LLM.RateLimit.Mode)
+	}
+	if c.LLM.RateLimit.MaxWaitSeconds < 0 {
+		return fmt.Errorf("llm.rate_limit.max_wait_seconds must be >= 0; got %d", c.LLM.RateLimit.MaxWaitSeconds)
 	}
 
 	switch c.Environment.Type {

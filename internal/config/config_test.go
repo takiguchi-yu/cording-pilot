@@ -31,6 +31,33 @@ func TestDefaultGoConfig_デフォルト値が正しく設定される(t *testin
 	if cfg.LLM.AutoFixModel != "gpt-5-mini" {
 		t.Errorf("LLM.AutoFixModel=%q; want %q", cfg.LLM.AutoFixModel, "gpt-5-mini")
 	}
+	if cfg.LLM.PlannerClarificationModel != cfg.LLM.Model {
+		t.Errorf("LLM.PlannerClarificationModel=%q; want %q", cfg.LLM.PlannerClarificationModel, cfg.LLM.Model)
+	}
+	if cfg.LLM.PlannerPlanModel != cfg.LLM.Model {
+		t.Errorf("LLM.PlannerPlanModel=%q; want %q", cfg.LLM.PlannerPlanModel, cfg.LLM.Model)
+	}
+	if cfg.LLM.CoderModel != cfg.LLM.Model {
+		t.Errorf("LLM.CoderModel=%q; want %q", cfg.LLM.CoderModel, cfg.LLM.Model)
+	}
+	if cfg.LLM.ReviewerModel != cfg.LLM.Model {
+		t.Errorf("LLM.ReviewerModel=%q; want %q", cfg.LLM.ReviewerModel, cfg.LLM.Model)
+	}
+	if cfg.LLM.Retry.Attempts != 3 {
+		t.Errorf("LLM.Retry.Attempts=%d; want 3", cfg.LLM.Retry.Attempts)
+	}
+	if cfg.LLM.Retry.InitialDelayMS != 500 {
+		t.Errorf("LLM.Retry.InitialDelayMS=%d; want 500", cfg.LLM.Retry.InitialDelayMS)
+	}
+	if cfg.LLM.Retry.Multiplier != 2.0 {
+		t.Errorf("LLM.Retry.Multiplier=%v; want 2.0", cfg.LLM.Retry.Multiplier)
+	}
+	if cfg.LLM.RateLimit.Mode != "fail_fast" {
+		t.Errorf("LLM.RateLimit.Mode=%q; want %q", cfg.LLM.RateLimit.Mode, "fail_fast")
+	}
+	if cfg.LLM.RateLimit.MaxWaitSeconds != 30 {
+		t.Errorf("LLM.RateLimit.MaxWaitSeconds=%d; want 30", cfg.LLM.RateLimit.MaxWaitSeconds)
+	}
 	if len(cfg.Pipeline) == 0 {
 		t.Error("Pipeline should not be empty")
 	}
@@ -58,6 +85,17 @@ func TestLoad_有効なYAMLファイルを読み込む(t *testing.T) {
 		"llm:\n" +
 		"  provider: copilot\n" +
 		"  model: gpt-4o-mini\n" +
+		"  planner_clarification_model: gpt-4o-mini\n" +
+		"  planner_plan_model: gpt-4o\n" +
+		"  coder_model: claude-3.5-sonnet\n" +
+		"  reviewer_model: gpt-4o\n" +
+		"  retry:\n" +
+		"    attempts: 2\n" +
+		"    initial_delay_ms: 100\n" +
+		"    multiplier: 1.5\n" +
+		"  rate_limit:\n" +
+		"    mode: honor_wait\n" +
+		"    max_wait_seconds: 15\n" +
 		"environment:\n" +
 		"  type: local\n" +
 		"pipeline:\n" +
@@ -77,6 +115,12 @@ func TestLoad_有効なYAMLファイルを読み込む(t *testing.T) {
 	}
 	if cfg.LLM.Model != "gpt-4o-mini" {
 		t.Errorf("LLM.Model=%q; want %q", cfg.LLM.Model, "gpt-4o-mini")
+	}
+	if cfg.LLM.CoderModel != "claude-3.5-sonnet" {
+		t.Errorf("LLM.CoderModel=%q; want %q", cfg.LLM.CoderModel, "claude-3.5-sonnet")
+	}
+	if cfg.LLM.RateLimit.Mode != "honor_wait" {
+		t.Errorf("LLM.RateLimit.Mode=%q; want %q", cfg.LLM.RateLimit.Mode, "honor_wait")
 	}
 	if len(cfg.Pipeline) != 1 || cfg.Pipeline[0].Name != "test" {
 		t.Errorf("Pipeline=%v; want 1 step with name=test", cfg.Pipeline)
@@ -240,6 +284,27 @@ pipeline:
 	_, err := config.Load(path)
 	if err == nil {
 		t.Fatal("不正な llm.provider でエラーを期待しましたが nil でした")
+	}
+}
+
+func TestLoad_不正なrateLimitModeはエラーを返す(t *testing.T) {
+	t.Parallel()
+	yaml := `version: "1.0"
+llm:
+  provider: copilot
+  model: gpt-4.1
+  rate_limit:
+    mode: invalid_mode
+environment:
+  type: local
+pipeline:
+  - name: test
+    command: go test ./...
+`
+	path := writeTemp(t, yaml)
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("不正な llm.rate_limit.mode でエラーを期待しましたが nil でした")
 	}
 }
 

@@ -92,6 +92,7 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 	}
 
 	// Step 3: Fix Loop.
+	implCache := make(map[string]agent.CodeGenerationResult)
 	for wfCtx.TryCount < maxTryCount {
 		wfCtx.TryCount++
 
@@ -102,7 +103,8 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 			return nil, err
 		}
 
-		implResult, genErr := s.generateImplCode(ctx, wfCtx)
+		cacheKey := wfCtx.PlanText + "\n\n" + wfCtx.LastTestOutput
+		implResult, fromCache, genErr := s.generateImplCodeWithCache(ctx, wfCtx, cacheKey, implCache)
 		if genErr != nil {
 			// JSON パースエラーの場合はエラー内容を LLM にフィードバックして再試行する。
 			if errors.Is(genErr, llm.ErrJSONParse) {
@@ -118,6 +120,11 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 		if len(implResult.Files) == 0 {
 			wfCtx.LastTestOutput = "実装コードのファイルリストが空です"
 			continue
+		}
+		if fromCache {
+			if err = s.Logger.Info("implement.cache_hit", "同一条件のため実装生成結果をキャッシュから再利用します"); err != nil {
+				return nil, err
+			}
 		}
 
 		for _, f := range implResult.Files {
@@ -294,4 +301,22 @@ func (s *ImplementState) generateImplCode(ctx context.Context, wfCtx *Context) (
 		return agent.CodeGenerationResult{}, fmt.Errorf("implement: generate impl: %w", err)
 	}
 	return result, nil
+}
+
+func (s *ImplementState) generateImplCodeWithCache(
+	ctx context.Context,
+	wfCtx *Context,
+	cacheKey string,
+	cache map[string]agent.CodeGenerationResult,
+) (agent.CodeGenerationResult, bool, error) {
+	if result, ok := cache[cacheKey]; ok {
+		return result, true, nil
+	}
+
+	result, err := s.generateImplCode(ctx, wfCtx)
+	if err != nil {
+		return agent.CodeGenerationResult{}, false, err
+	}
+	cache[cacheKey] = result
+	return result, false, nil
 }

@@ -3,9 +3,33 @@ package retry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
+
+// NonRetryableError はリトライ対象外として即時に終了すべきエラーを表します。
+type NonRetryableError struct {
+	err error
+}
+
+// Error implements error.
+func (e *NonRetryableError) Error() string {
+	if e.err == nil {
+		return "retry: non-retryable error"
+	}
+	return e.err.Error()
+}
+
+// Unwrap implements error.
+func (e *NonRetryableError) Unwrap() error {
+	return e.err
+}
+
+// NonRetryable は err を「リトライ不要」なエラーとしてラップします。
+func NonRetryable(err error) error {
+	return &NonRetryableError{err: err}
+}
 
 // Policy は Do の動作を設定します。
 type Policy struct {
@@ -42,6 +66,13 @@ func Do(ctx context.Context, p Policy, fn func() error) error {
 		if err := fn(); err == nil {
 			return nil
 		} else {
+			var nonRetryable *NonRetryableError
+			if errors.As(err, &nonRetryable) {
+				if unwrapped := nonRetryable.Unwrap(); unwrapped != nil {
+					return unwrapped
+				}
+				return fmt.Errorf("retry: non-retryable error")
+			}
 			lastErr = err
 		}
 

@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/takiguchi-yu/cording-pilot/internal/llm"
 	"github.com/takiguchi-yu/cording-pilot/pkg/logger"
@@ -37,6 +38,21 @@ func TestNewCopilotClient_空のmodelはデフォルトモデルを使用する(
 	log := logger.New(&strings.Builder{})
 	// model="" でもエラーにならないことを確認（内部でデフォルト値が補完される）。
 	c, err := llm.NewCopilotClient("", "dummy-token", log)
+	if err != nil {
+		t.Fatalf("予期しないエラー: %v", err)
+	}
+	if c == nil {
+		t.Fatal("nil CopilotClient が返されました")
+	}
+}
+
+func TestNewCopilotClientWithOptions_有効なオプションで生成に成功する(t *testing.T) {
+	t.Parallel()
+	log := logger.New(&strings.Builder{})
+	c, err := llm.NewCopilotClientWithOptions("gpt-4o", "dummy-token", log, llm.CopilotOptions{
+		RateLimitMode:    "honor_wait",
+		MaxRateLimitWait: 10 * time.Second,
+	})
 	if err != nil {
 		t.Fatalf("予期しないエラー: %v", err)
 	}
@@ -208,5 +224,27 @@ func TestSanitizeJSONResponse(t *testing.T) {
 				t.Errorf("sanitizeJSONResponse(%q) = %q; want %q", tc.input, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestExtractWaitSeconds(t *testing.T) {
+	t.Parallel()
+	msg := "Rate limit of 50 per 86400s exceeded for UserByModelByDay. Please wait 79273 seconds before retrying."
+	seconds, ok := llm.ExportExtractWaitSeconds(msg)
+	if !ok {
+		t.Fatal("wait seconds should be detected")
+	}
+	if seconds != 79273 {
+		t.Errorf("seconds=%d; want 79273", seconds)
+	}
+}
+
+func TestIsDailyLimitMessage(t *testing.T) {
+	t.Parallel()
+	if !llm.ExportIsDailyLimitMessage("Rate limit of 50 per 86400s exceeded for UserByModelByDay") {
+		t.Error("expected true for daily limit message")
+	}
+	if llm.ExportIsDailyLimitMessage("temporary overload") {
+		t.Error("expected false for non-daily message")
 	}
 }

@@ -4,9 +4,13 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	openai "github.com/sashabaranov/go-openai"
 	"github.com/takiguchi-yu/cording-pilot/pkg/logger"
@@ -14,32 +18,66 @@ import (
 )
 
 const (
-	copilotBaseURL = "https://models.inference.ai.azure.com"
+	copilotBaseURL         = "https://models.inference.ai.azure.com"
+	rateLimitModeFailFast  = "fail_fast"
+	rateLimitModeHonorWait = "honor_wait"
 )
+
+var waitSecondsPattern = regexp.MustCompile(`Please wait\s+(\d+)\s+seconds`)
+
+// CopilotOptions は CopilotClient のリトライ・レートリミット挙動を制御します。
+type CopilotOptions struct {
+	RetryPolicy      retry.Policy
+	RateLimitMode    string
+	MaxRateLimitWait time.Duration
+}
 
 // CopilotClient は GitHub Copilot (GitHub Models API) を使用する llm.Client 実装です。
 // ゴルーチン安全です。
 type CopilotClient struct {
-	client *openai.Client
-	model  string
-	log    *logger.Logger
+	client           *openai.Client
+	model            string
+	log              *logger.Logger
+	retryPolicy      retry.Policy
+	rateLimitMode    string
+	maxRateLimitWait time.Duration
 }
 
 // NewCopilotClient は指定したトークンとモデルで CopilotClient を生成します。
 // token が空の場合はエラーを返します。
 func NewCopilotClient(model, token string, log *logger.Logger) (*CopilotClient, error) {
+	return NewCopilotClientWithOptions(model, token, log, CopilotOptions{})
+}
+
+// NewCopilotClientWithOptions は指定したトークン・モデル・挙動オプションで CopilotClient を生成します。
+func NewCopilotClientWithOptions(model, token string, log *logger.Logger, opts CopilotOptions) (*CopilotClient, error) {
 	if token == "" {
 		return nil, fmt.Errorf("llm: GITHUB_TOKEN 環境変数が設定されていません")
 	}
 	if model == "" {
 		model = "gpt-4o"
 	}
+	retryPolicy := opts.RetryPolicy
+	if retryPolicy.MaxAttempts == 0 {
+		retryPolicy = retry.DefaultPolicy
+	}
+	rateLimitMode := strings.ToLower(strings.TrimSpace(opts.RateLimitMode))
+	if rateLimitMode == "" {
+		rateLimitMode = rateLimitModeFailFast
+	}
+	maxRateLimitWait := opts.MaxRateLimitWait
+	if maxRateLimitWait <= 0 {
+		maxRateLimitWait = 30 * time.Second
+	}
 	config := openai.DefaultConfig(token)
 	config.BaseURL = copilotBaseURL
 	return &CopilotClient{
-		client: openai.NewClientWithConfig(config),
-		model:  model,
-		log:    log,
+		client:           openai.NewClientWithConfig(config),
+		model:            model,
+		log:              log,
+		retryPolicy:      retryPolicy,
+		rateLimitMode:    rateLimitMode,
+		maxRateLimitWait: maxRateLimitWait,
 	}, nil
 }
 
@@ -50,7 +88,7 @@ func (c *CopilotClient) Generate(ctx context.Context, prompt string) (string, er
 	_ = c.log.Debug("llm.generate.request", fmt.Sprintf("prompt=%q", prompt))
 
 	var result string
-	err := retry.Do(ctx, retry.DefaultPolicy, func() error {
+	err := retry.Do(ctx, c.retryPolicy, func() error {
 		resp, apiErr := c.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 			Model: c.model,
 			Messages: []openai.ChatCompletionMessage{
@@ -58,7 +96,7 @@ func (c *CopilotClient) Generate(ctx context.Context, prompt string) (string, er
 			},
 		})
 		if apiErr != nil {
-			return fmt.Errorf("llm: generate: %w", apiErr)
+			return c.handleAPIError(ctx, "llm: generate", apiErr)
 		}
 		result = resp.Choices[0].Message.Content
 		return nil
@@ -93,7 +131,7 @@ func (c *CopilotClient) GenerateStructured(ctx context.Context, prompt string, t
 	_ = c.log.Debug("llm.generateStructured.request", fmt.Sprintf("prompt=%q schema=%s isClaude=%v", userPrompt, schemaBytes, isClaude))
 
 	var raw string
-	retryErr := retry.Do(ctx, retry.DefaultPolicy, func() error {
+	retryErr := retry.Do(ctx, c.retryPolicy, func() error {
 		req := openai.ChatCompletionRequest{
 			Model: c.model,
 			Messages: []openai.ChatCompletionMessage{
@@ -112,7 +150,7 @@ func (c *CopilotClient) GenerateStructured(ctx context.Context, prompt string, t
 		}
 		resp, apiErr := c.client.CreateChatCompletion(ctx, req)
 		if apiErr != nil {
-			return fmt.Errorf("llm: generate structured: %w", apiErr)
+			return c.handleAPIError(ctx, "llm: generate structured", apiErr)
 		}
 		raw = resp.Choices[0].Message.Content
 		return nil
@@ -147,6 +185,75 @@ func sanitizeJSONResponse(s string) string {
 		s = strings.TrimSpace(s)
 	}
 	return s
+}
+
+func (c *CopilotClient) handleAPIError(ctx context.Context, operation string, apiErr error) error {
+	var openAIErr *openai.APIError
+	if !errors.As(apiErr, &openAIErr) {
+		return fmt.Errorf("%s: %w", operation, apiErr)
+	}
+
+	if openAIErr.HTTPStatusCode != 429 {
+		return fmt.Errorf("%s: %w", operation, apiErr)
+	}
+
+	message := strings.TrimSpace(openAIErr.Message)
+	waitSeconds, hasWaitSeconds := extractWaitSeconds(message)
+	_ = c.log.Warn("llm.rate_limit", fmt.Sprintf("model=%s mode=%s wait_seconds=%d message=%q", c.model, c.rateLimitMode, waitSeconds, message))
+
+	if isDailyLimitMessage(message) || c.rateLimitMode == rateLimitModeFailFast {
+		return retry.NonRetryable(fmt.Errorf("%s: %w", operation, apiErr))
+	}
+
+	if c.rateLimitMode != rateLimitModeHonorWait || !hasWaitSeconds {
+		return fmt.Errorf("%s: %w", operation, apiErr)
+	}
+
+	waitDuration := time.Duration(waitSeconds) * time.Second
+	if waitDuration > c.maxRateLimitWait {
+		return retry.NonRetryable(fmt.Errorf("%s: rate limit wait %s exceeds max wait %s: %w", operation, waitDuration, c.maxRateLimitWait, apiErr))
+	}
+
+	if err := c.waitForRateLimit(ctx, waitDuration); err != nil {
+		return retry.NonRetryable(fmt.Errorf("%s: wait for rate limit reset: %w", operation, err))
+	}
+
+	return fmt.Errorf("%s: %w", operation, apiErr)
+}
+
+func (c *CopilotClient) waitForRateLimit(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+
+	_ = c.log.Info("llm.rate_limit_wait", fmt.Sprintf("model=%s waiting=%s", c.model, d))
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
+}
+
+func extractWaitSeconds(message string) (int, bool) {
+	matches := waitSecondsPattern.FindStringSubmatch(message)
+	if len(matches) != 2 {
+		return 0, false
+	}
+	seconds, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0, false
+	}
+	if seconds < 0 {
+		return 0, false
+	}
+	return seconds, true
+}
+
+func isDailyLimitMessage(message string) bool {
+	lower := strings.ToLower(message)
+	return strings.Contains(lower, "userbymodelbyday") || strings.Contains(lower, "per 86400s exceeded")
 }
 
 // jsonMarshalMap は json.Marshaler を実装する map ラッパーです。

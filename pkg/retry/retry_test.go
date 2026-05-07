@@ -110,3 +110,21 @@ func TestDo_1回のみ試行してリトライしない(t *testing.T) {
 		t.Errorf("calls=%d; want 1", calls)
 	}
 }
+
+func TestDo_NonRetryableErrorは即時終了する(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	err := retry.Do(context.Background(), retry.Policy{MaxAttempts: 5, InitialDelay: 0, Multiplier: 1}, func() error {
+		calls++
+		return retry.NonRetryable(errFake)
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, errFake) {
+		t.Errorf("error should wrap errFake; got: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("calls=%d; want 1", calls)
+	}
+}

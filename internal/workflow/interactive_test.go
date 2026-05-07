@@ -17,6 +17,7 @@ type stubPlannerAgent struct {
 	clarifyErr    error
 	compiledIssue string
 	compileErr    error
+	compileCalls  int
 }
 
 func (s *stubPlannerAgent) Ask(_ context.Context, _ string) (string, error) {
@@ -28,6 +29,7 @@ func (s *stubPlannerAgent) GenerateClarification(_ context.Context, _ string) (a
 }
 
 func (s *stubPlannerAgent) CompileIssue(_ context.Context, _ string, _ map[string]string, _ string) (string, error) {
+	s.compileCalls++
 	return s.compiledIssue, s.compileErr
 }
 
@@ -65,6 +67,9 @@ func TestInteractiveState_要件が明確な場合スキップ(t *testing.T) {
 	if wfCtx.Requirement != "# タイトル\n\n本文" {
 		t.Errorf("unexpected compiled requirement: %q", wfCtx.Requirement)
 	}
+	if stub.compileCalls != 1 {
+		t.Errorf("CompileIssue calls=%d; want 1", stub.compileCalls)
+	}
 }
 
 func TestInteractiveState_質問が空の場合スキップ(t *testing.T) {
@@ -97,6 +102,9 @@ func TestInteractiveState_質問が空の場合スキップ(t *testing.T) {
 	}
 	if next != nextState {
 		t.Error("expected nextState to be returned")
+	}
+	if stub.compileCalls != 1 {
+		t.Errorf("CompileIssue calls=%d; want 1", stub.compileCalls)
 	}
 }
 

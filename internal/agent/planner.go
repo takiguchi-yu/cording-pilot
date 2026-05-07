@@ -61,8 +61,10 @@ func (p *plannerAgentImpl) GenerateClarification(ctx context.Context, requiremen
 ---
 
 [CLARIFY] 以下の要件を分析し、実装品質を高めるために確認すべき事項を JSON で返してください。
-要件の有無に関わらず、3〜5 件の確認質問（言語・エラーハンドリング・境界条件・テスト方針など）を必ず生成してください。
-要件が全く提供されていない場合のみ is_clear を false に設定し、requirements が提供されている場合は is_clear は常に false としてください。
+一度の回答で、実装に最低限必要な質問だけを提示してください。
+細かすぎる質問や、実装に本質的でない質問は避けてください。
+質問が必要な場合でも最大 1 件にしてください。要件が十分明確なら questions は空配列にしてください。
+is_clear は、questions が空の場合のみ true、それ以外は false にしてください。
 
 要件:
 %s`, p.systemPrompt, requirement)
@@ -73,6 +75,10 @@ func (p *plannerAgentImpl) GenerateClarification(ctx context.Context, requiremen
 	if err := p.llm.GenerateStructured(ctx, prompt, &result); err != nil {
 		return ClarificationRequest{}, fmt.Errorf("planner: generate clarification: %w", err)
 	}
+	if len(result.Questions) > 1 {
+		result.Questions = result.Questions[:1]
+	}
+	result.IsClear = len(result.Questions) == 0
 	return result, nil
 }
 

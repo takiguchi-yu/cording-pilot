@@ -3,10 +3,27 @@ version: "1.0"
 llm:
   # 使用する LLM プロバイダー（現在対応: copilot）
   provider: "copilot"
-  # 使用するモデル名
-  model: "gpt-4.1"
+  # フォールバック用の共通モデル名
+  model: "gpt-4o"
   # 自己修復フェーズで使用する軽量モデル名（省略時は model と同じ値を使用）
   auto_fix_model: "gpt-5-mini"
+  # Interactive の確認質問は安価で高速なモデルに寄せる
+  planner_clarification_model: "gpt-4o-mini"
+  # 実装計画と Issue 整形は精度を優先しつつ Coder とは枠を分ける
+  planner_plan_model: "gpt-4o"
+  # 実装フェーズは最も賢いモデルを使う
+  coder_model: "claude-3.5-sonnet"
+  # 査読は別枠のモデルに分ける
+  reviewer_model: "gpt-4o"
+  # 失敗時の追加消費を抑えるため、通常エラーも 1 回だけ再試行する
+  retry:
+    attempts: 2
+    initial_delay_ms: 1000
+    multiplier: 2.0
+  # 日次上限に達した場合は待たずに即終了する
+  rate_limit:
+    mode: "fail_fast"
+    max_wait_seconds: 30
 
 environment:
   # 実行環境の種類: local（デフォルト）, docker, nix
