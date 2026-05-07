@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,8 +11,8 @@ import (
 	"github.com/takiguchi-yu/cording-pilot/internal/agent"
 	"github.com/takiguchi-yu/cording-pilot/internal/config"
 	"github.com/takiguchi-yu/cording-pilot/internal/executor"
+	"github.com/takiguchi-yu/cording-pilot/internal/llm"
 	"github.com/takiguchi-yu/cording-pilot/pkg/logger"
-	"github.com/takiguchi-yu/cording-pilot/pkg/markdown"
 )
 
 const (
@@ -23,7 +24,7 @@ const (
 // TDD サイクル（テスト生成→実行（Red）→実装生成→実行（Green or Red））を最大 maxTryCount 回繰り返します。
 // 成功時は Next（ReviewState）へ遷移し、上限到達時はエラーを返します。
 type ImplementState struct {
-	Coder  agent.Agent
+	Coder  agent.CoderAgent
 	Exec   executor.Executor
 	Logger *logger.Logger
 	// Next は全テスト通過時の後継ステート（通常は ReviewState）です。
@@ -61,12 +62,17 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 	}
 
 	// Step 1: generate test code.
-	testCode, err := s.generateTestCode(ctx, wfCtx)
+	testResult, err := s.generateTestCode(ctx, wfCtx)
 	if err != nil {
 		return nil, err
 	}
-	if err = os.WriteFile(filepath.Join(workDir, "task_test.go"), []byte(testCode), 0o600); err != nil {
-		return nil, fmt.Errorf("implement: write test file: %w", err)
+	if len(testResult.Files) == 0 {
+		return nil, fmt.Errorf("implement: LLM returned no files for test code generation")
+	}
+	for _, f := range testResult.Files {
+		if writeErr := safeWriteFile(workDir, f.Path, []byte(f.Content)); writeErr != nil {
+			return nil, fmt.Errorf("implement: write test file: %w", writeErr)
+		}
 	}
 
 	// Step 2: initial pipeline run (expected Red — no implementation yet).
@@ -90,12 +96,28 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 			return nil, err
 		}
 
-		implCode, genErr := s.generateImplCode(ctx, wfCtx)
+		implResult, genErr := s.generateImplCode(ctx, wfCtx)
 		if genErr != nil {
+			// JSON パースエラーの場合はエラー内容を LLM にフィードバックして再試行する。
+			if errors.Is(genErr, llm.ErrJSONParse) {
+				wfCtx.LastTestOutput = genErr.Error()
+				if logErr := s.Logger.Info("implement.json_parse_error",
+					fmt.Sprintf("JSON 解析エラーを Fix Loop にフィードバックします: %v", genErr)); logErr != nil {
+					return nil, logErr
+				}
+				continue
+			}
 			return nil, genErr
 		}
-		if err = os.WriteFile(filepath.Join(workDir, "task.go"), []byte(implCode), 0o600); err != nil {
-			return nil, fmt.Errorf("implement: write impl file: %w", err)
+		if len(implResult.Files) == 0 {
+			wfCtx.LastTestOutput = "実装コードのファイルリストが空です"
+			continue
+		}
+
+		for _, f := range implResult.Files {
+			if writeErr := safeWriteFile(workDir, f.Path, []byte(f.Content)); writeErr != nil {
+				return nil, fmt.Errorf("implement: write impl file: %w", writeErr)
+			}
 		}
 
 		out, success, pipeErr := s.runPipeline(ctx, workDir, cfg.Pipeline)
@@ -121,6 +143,33 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 
 	return nil, fmt.Errorf("implement: Fix Loop の上限 (%d 回) に達しました。最後のパイプライン出力:\n%s",
 		maxTryCount, wfCtx.LastTestOutput)
+}
+
+// safeWriteFile は workDir 配下の relPath にコンテンツを書き込みます。
+// パストラバーサル攻撃を防ぐため、書き込み先が workDir 内に収まることを検証します。
+// "../" 等の不正なパスが指定された場合はエラーを返し、書き込みは行いません。
+func safeWriteFile(workDir, relPath string, content []byte) error {
+	if filepath.IsAbs(relPath) {
+		return fmt.Errorf("safeWriteFile: 絶対パスは許可されていません: %q", relPath)
+	}
+
+	clean := filepath.Clean(relPath)
+	// filepath.Clean 後でも ".." で始まる場合はパストラバーサルとみなす。
+	if strings.HasPrefix(clean, "..") {
+		return fmt.Errorf("safeWriteFile: パストラバーサルが検出されました: %q", relPath)
+	}
+
+	fullPath := filepath.Join(workDir, clean)
+	// Rel で再検証: workDir の外を指す場合は ".." で始まる相対パスになる。
+	rel, err := filepath.Rel(workDir, fullPath)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("safeWriteFile: ワークディレクトリ外へのパスは許可されていません: %q", relPath)
+	}
+
+	if err = os.MkdirAll(filepath.Dir(fullPath), 0o700); err != nil {
+		return fmt.Errorf("safeWriteFile: ディレクトリ作成に失敗しました: %w", err)
+	}
+	return os.WriteFile(fullPath, content, 0o600)
 }
 
 // runPipeline は cfg.Pipeline の各ステップを順番に Executor で実行します。
@@ -150,37 +199,27 @@ func (s *ImplementState) runPipeline(ctx context.Context, workDir string, steps 
 	return sb.String(), true, nil
 }
 
-func (s *ImplementState) generateTestCode(ctx context.Context, wfCtx *Context) (string, error) {
+func (s *ImplementState) generateTestCode(ctx context.Context, wfCtx *Context) (agent.CodeGenerationResult, error) {
 	prompt := fmt.Sprintf(
 		"[TEST_GEN] 以下の実装計画に基づいてGoのテストコード(task_test.go)を生成してください。\n\n%s",
 		wfCtx.PlanText,
 	)
-	resp, err := s.Coder.Ask(ctx, prompt)
+	result, err := s.Coder.GenerateCode(ctx, prompt)
 	if err != nil {
-		return "", fmt.Errorf("implement: generate test: %w", err)
+		return agent.CodeGenerationResult{}, fmt.Errorf("implement: generate test: %w", err)
 	}
-
-	code, ok := markdown.ExtractCodeBlock(resp, "go")
-	if !ok {
-		return "", fmt.Errorf("implement: LLM returned no Go code block for test")
-	}
-	return code, nil
+	return result, nil
 }
 
-func (s *ImplementState) generateImplCode(ctx context.Context, wfCtx *Context) (string, error) {
+func (s *ImplementState) generateImplCode(ctx context.Context, wfCtx *Context) (agent.CodeGenerationResult, error) {
 	prompt := fmt.Sprintf(
 		"以下の実装計画とパイプライン失敗の出力を元に、プロダクトコードを生成してください。\n\n## 実装計画\n%s\n\n## パイプライン出力\n%s",
 		wfCtx.PlanText,
 		wfCtx.LastTestOutput,
 	)
-	resp, err := s.Coder.Ask(ctx, prompt)
+	result, err := s.Coder.GenerateCode(ctx, prompt)
 	if err != nil {
-		return "", fmt.Errorf("implement: generate impl: %w", err)
+		return agent.CodeGenerationResult{}, fmt.Errorf("implement: generate impl: %w", err)
 	}
-
-	code, ok := markdown.ExtractCodeBlock(resp, "go")
-	if !ok {
-		return "", fmt.Errorf("implement: LLM returned no Go code block for implementation")
-	}
-	return code, nil
+	return result, nil
 }

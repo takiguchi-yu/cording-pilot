@@ -2,10 +2,23 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 )
 
-const mockTestCode = "```go\n" + `package task
+// mockFile は GenerateStructured が返す JSON 内のファイルエントリです。
+type mockFile struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+// mockCodeResult は GenerateStructured が返す JSON の最上位オブジェクトです。
+type mockCodeResult struct {
+	Files []mockFile `json:"files"`
+}
+
+const mockTestCodeContent = `package task
 
 import "testing"
 
@@ -27,17 +40,17 @@ func TestReverse(t *testing.T) {
 		}
 	}
 }
-` + "```"
+`
 
-const mockBuggyImplCode = "```go\n" + `package task
+const mockBuggyImplContent = `package task
 
 // Reverse is a stub that intentionally returns the input unchanged.
 func Reverse(s string) string {
 	return s
 }
-` + "```"
+`
 
-const mockCorrectImplCode = "```go\n" + `package task
+const mockCorrectImplContent = `package task
 
 // Reverse returns the UTF-8 characters of s in reverse order.
 func Reverse(s string) string {
@@ -47,7 +60,7 @@ func Reverse(s string) string {
 	}
 	return string(runes)
 }
-` + "```"
+`
 
 const mockPlanText = `## 実装計画
 
@@ -67,44 +80,75 @@ const mockReviewApprove = `## レビュー結果: Approve
 すべてのテストが通過しており、実装は要件を満たしています。
 コードスタイルも Effective Go に準拠しています。`
 
-// MockClient is a mock implementation of Client for local development and prototyping.
-// It dispatches pre-canned responses based on keywords in the prompt.
-// On the first implementation request it returns buggy code; subsequent calls
-// return the correct implementation, simulating Fix Loop convergence.
+// MockClient は Client のモック実装です。ローカル開発・プロトタイピング用です。
+// プロンプト中のキーワードに基づいて事前定義済みのレスポンスを返します。
+// 最初の実装リクエストではバグのあるコードを返し、2 回目以降は正しい実装を返すことで
+// Fix Loop の収束をシミュレートします。
 type MockClient struct {
 	implCallCount int
 }
 
-// NewMockClient creates a new MockClient.
+// NewMockClient は新しい MockClient を生成します。
 func NewMockClient() *MockClient {
 	return &MockClient{}
 }
 
-// Generate returns a pre-defined response determined by keywords in prompt.
-// If the prompt contains the system/task separator "---", only the task section
-// (the part after the separator) is inspected for dispatch keywords.
-func (m *MockClient) Generate(_ context.Context, prompt string) (string, error) {
-	// Use only the task portion of the prompt for dispatch so that keywords
-	// present in the system prompt do not interfere with routing.
-	taskPart := prompt
+// taskPart はプロンプトから「---」セパレータ以降のタスク部分を抽出します。
+func taskPart(prompt string) string {
 	const sep = "\n\n---\n\n"
 	if idx := strings.Index(prompt, sep); idx != -1 {
-		taskPart = prompt[idx+len(sep):]
+		return prompt[idx+len(sep):]
 	}
-	lower := strings.ToLower(taskPart)
+	return prompt
+}
+
+// Generate はプロンプト中のキーワードに基づいた事前定義済みのテキストレスポンスを返します。
+// プロンプトにシステム／タスクセパレータ "---" が含まれる場合、タスク部分のみでキーワードを判定します。
+func (m *MockClient) Generate(_ context.Context, prompt string) (string, error) {
+	lower := strings.ToLower(taskPart(prompt))
 
 	switch {
 	case strings.Contains(lower, "[review]") || strings.Contains(lower, "レビュー"):
 		return mockReviewApprove, nil
-	case strings.Contains(lower, "[test_gen]"):
-		return mockTestCode, nil
 	case strings.Contains(lower, "[plan]") || strings.Contains(lower, "実装計画を作成"):
 		return mockPlanText, nil
 	default:
-		m.implCallCount++
-		if m.implCallCount == 1 {
-			return mockBuggyImplCode, nil
-		}
-		return mockCorrectImplCode, nil
+		return "", nil
 	}
+}
+
+// GenerateStructured はプロンプト中のキーワードに基づいた CodeGenerationResult 相当の
+// JSON を target にデコードします。
+// JSON デコードに失敗した場合は ErrJSONParse をラップしたエラーを返します。
+func (m *MockClient) GenerateStructured(_ context.Context, prompt string, target interface{}) error {
+	lower := strings.ToLower(taskPart(prompt))
+
+	var result mockCodeResult
+	if strings.Contains(lower, "[test_gen]") {
+		result = mockCodeResult{
+			Files: []mockFile{
+				{Path: "task_test.go", Content: mockTestCodeContent},
+			},
+		}
+	} else {
+		m.implCallCount++
+		content := mockBuggyImplContent
+		if m.implCallCount > 1 {
+			content = mockCorrectImplContent
+		}
+		result = mockCodeResult{
+			Files: []mockFile{
+				{Path: "task.go", Content: content},
+			},
+		}
+	}
+
+	data, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("%w: marshal mock result: %v", ErrJSONParse, err)
+	}
+	if err = json.Unmarshal(data, target); err != nil {
+		return fmt.Errorf("%w: %v", ErrJSONParse, err)
+	}
+	return nil
 }

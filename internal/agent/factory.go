@@ -46,12 +46,30 @@ func (f *Factory) NewPlanner() Agent {
 }
 
 // NewCoder は Go のテストコードとプロダクトコードの両方を生成する実装エージェントを生成します。
+// 後方互換のために残しています。新規コードには NewCoderAgent を使用してください。
 func (f *Factory) NewCoder() Agent {
 	return &baseAgent{
 		name: "Coder",
 		systemPrompt: `あなたは熟練のGoエンジニアです。
 テストコードまたはプロダクトコードの生成を求められます。
 コードのみを ` + "```go ... ```" + ` の形式で出力し、余分な説明は加えないでください。`,
+		llm: f.llm,
+	}
+}
+
+// NewCoderAgent は構造化された JSON 形式でコードを生成する実装エージェントを生成します。
+// LLM に指定された JSON スキーマ（CodeGenerationResult）に従った出力を求めます。
+func (f *Factory) NewCoderAgent() CoderAgent {
+	return &structuredCoder{
+		name: "Coder",
+		systemPrompt: `あなたは熟練のGoエンジニアです。
+テストコードまたはプロダクトコードの生成を求められます。
+余分な説明やMarkdownコードブロックは含めず、以下のJSONスキーマに厳密に従って出力してください。
+
+{"files":[{"path":"ファイルのパス","content":"ファイルの内容"}]}
+
+- path にはリポジトリルートからの相対パスを指定してください。
+- content にはファイルの完全な内容を文字列として指定してください。`,
 		llm: f.llm,
 	}
 }

@@ -3,10 +3,13 @@ package workflow_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/takiguchi-yu/cording-pilot/internal/agent"
 	"github.com/takiguchi-yu/cording-pilot/internal/config"
+	"github.com/takiguchi-yu/cording-pilot/internal/llm"
 	"github.com/takiguchi-yu/cording-pilot/internal/workflow"
 	"github.com/takiguchi-yu/cording-pilot/pkg/logger"
 )
@@ -46,17 +49,32 @@ func singleStepConfig() *config.Config {
 	}
 }
 
+// testFiles は [TEST_GEN] タスク向けの標準テストファイルセットを返します。
+func testFiles() agent.CodeGenerationResult {
+	return agent.CodeGenerationResult{
+		Files: []agent.FileUpdate{
+			{Path: "task_test.go", Content: "package task\nfunc TestDummy(t *testing.T){}\n"},
+		},
+	}
+}
+
+// implFiles はシンプルな実装ファイルセットを返します。
+func implFiles() agent.CodeGenerationResult {
+	return agent.CodeGenerationResult{
+		Files: []agent.FileUpdate{
+			{Path: "task.go", Content: "package task\n"},
+		},
+	}
+}
+
 func TestImplementState_Execute_初回イテレーションで成功する(t *testing.T) {
 	t.Parallel()
 
-	// Coder returns test code first, then correct impl code.
-	callCount := 0
-	coder := &funcAgent{fn: func(_ context.Context, task string) (string, error) {
-		callCount++
+	coder := &funcCoderAgent{fn: func(_ context.Context, task string) (agent.CodeGenerationResult, error) {
 		if strings.Contains(task, "[TEST_GEN]") {
-			return "```go\npackage task\nfunc TestDummy(t *testing.T){}\n```", nil
+			return testFiles(), nil
 		}
-		return "```go\npackage task\n```", nil
+		return implFiles(), nil
 	}}
 
 	exec := &stubExecutor{
@@ -90,11 +108,11 @@ func TestImplementState_Execute_初回イテレーションで成功する(t *te
 func TestImplementState_Execute_Fixループ上限到達でエラーを返す(t *testing.T) {
 	t.Parallel()
 
-	coder := &funcAgent{fn: func(_ context.Context, task string) (string, error) {
+	coder := &funcCoderAgent{fn: func(_ context.Context, task string) (agent.CodeGenerationResult, error) {
 		if strings.Contains(task, "[TEST_GEN]") {
-			return "```go\npackage task\nfunc TestDummy(t *testing.T){}\n```", nil
+			return testFiles(), nil
 		}
-		return "```go\npackage task\n```", nil
+		return implFiles(), nil
 	}}
 
 	// All runs fail.
@@ -123,12 +141,12 @@ func TestImplementState_Execute_Fixループ上限到達でエラーを返す(t 
 	}
 }
 
-func TestImplementState_Execute_テストレスポンスにコードブロックがない場合エラーを返す(t *testing.T) {
+func TestImplementState_Execute_テストファイルリストが空の場合エラーを返す(t *testing.T) {
 	t.Parallel()
 
-	// Coder returns plain text with no code fence.
-	coder := &funcAgent{fn: func(_ context.Context, _ string) (string, error) {
-		return "no code block here", nil
+	// Coder returns an empty Files list.
+	coder := &funcCoderAgent{fn: func(_ context.Context, _ string) (agent.CodeGenerationResult, error) {
+		return agent.CodeGenerationResult{}, nil
 	}}
 
 	s := &workflow.ImplementState{
@@ -148,8 +166,8 @@ func TestImplementState_Execute_テスト生成エージェントエラー時に
 	t.Parallel()
 
 	wantErr := errors.New("test gen agent error")
-	coder := &funcAgent{fn: func(_ context.Context, _ string) (string, error) {
-		return "", wantErr
+	coder := &funcCoderAgent{fn: func(_ context.Context, _ string) (agent.CodeGenerationResult, error) {
+		return agent.CodeGenerationResult{}, wantErr
 	}}
 
 	s := &workflow.ImplementState{
@@ -171,11 +189,11 @@ func TestImplementState_Execute_テスト生成エージェントエラー時に
 func TestImplementState_Execute_初期テスト実行インフラエラー時にエラーを返す(t *testing.T) {
 	t.Parallel()
 
-	coder := &funcAgent{fn: func(_ context.Context, task string) (string, error) {
+	coder := &funcCoderAgent{fn: func(_ context.Context, task string) (agent.CodeGenerationResult, error) {
 		if strings.Contains(task, "[TEST_GEN]") {
-			return "```go\npackage task\nfunc TestDummy(t *testing.T){}\n```", nil
+			return testFiles(), nil
 		}
-		return "```go\npackage task\n```", nil
+		return implFiles(), nil
 	}}
 
 	infraErr := errors.New("exec infra error")
@@ -205,12 +223,12 @@ func TestImplementState_Execute_実装コード生成エージェントエラー
 	t.Parallel()
 
 	wantErr := errors.New("impl gen agent error")
-	coder := &funcAgent{fn: func(_ context.Context, task string) (string, error) {
+	coder := &funcCoderAgent{fn: func(_ context.Context, task string) (agent.CodeGenerationResult, error) {
 		if strings.Contains(task, "[TEST_GEN]") {
-			return "```go\npackage task\nfunc TestDummy(t *testing.T){}\n```", nil
+			return testFiles(), nil
 		}
-		// 実装コード生成時にエージェントがエラーを返す。
-		return "", wantErr
+		// 実装コード生成時にエージェントがエラーを返す（JSON パースエラーではない）。
+		return agent.CodeGenerationResult{}, wantErr
 	}}
 
 	exec := &stubExecutor{
@@ -238,11 +256,11 @@ func TestImplementState_Execute_実装コード生成エージェントエラー
 func TestImplementState_Execute_Fixループでインフラエラー時にエラーを返す(t *testing.T) {
 	t.Parallel()
 
-	coder := &funcAgent{fn: func(_ context.Context, task string) (string, error) {
+	coder := &funcCoderAgent{fn: func(_ context.Context, task string) (agent.CodeGenerationResult, error) {
 		if strings.Contains(task, "[TEST_GEN]") {
-			return "```go\npackage task\nfunc TestDummy(t *testing.T){}\n```", nil
+			return testFiles(), nil
 		}
-		return "```go\npackage task\n```", nil
+		return implFiles(), nil
 	}}
 
 	infraErr := errors.New("fix loop infra error")
@@ -269,11 +287,80 @@ func TestImplementState_Execute_Fixループでインフラエラー時にエラ
 	}
 }
 
-// funcAgent は関数をバックエンドとする汎用 agent.Agentです。
-type funcAgent struct {
-	fn func(ctx context.Context, task string) (string, error)
+func TestImplementState_Execute_パストラバーサルでエラーを返す(t *testing.T) {
+	t.Parallel()
+
+	// テスト生成で不正なパスを返す。
+	coder := &funcCoderAgent{fn: func(_ context.Context, _ string) (agent.CodeGenerationResult, error) {
+		return agent.CodeGenerationResult{
+			Files: []agent.FileUpdate{
+				{Path: "../malicious.go", Content: "package main"},
+			},
+		}, nil
+	}}
+
+	s := &workflow.ImplementState{
+		Coder:  coder,
+		Exec:   &stubExecutor{},
+		Logger: logger.New(&strings.Builder{}),
+		Next:   &stubState{},
+	}
+
+	_, err := s.Execute(context.Background(), &workflow.Context{PlanText: "plan", Config: singleStepConfig()})
+	if err == nil {
+		t.Fatal("パストラバーサルエラーを期待しましたが nil でした")
+	}
 }
 
-func (a *funcAgent) Ask(ctx context.Context, task string) (string, error) {
+func TestImplementState_Execute_JSON解析エラーをFixLoopにフィードバックする(t *testing.T) {
+	t.Parallel()
+
+	// [TEST_GEN] → 正常, 1回目の実装 → JSON パースエラー, 2回目の実装 → 正常
+	implCallCount := 0
+	coder := &funcCoderAgent{fn: func(_ context.Context, task string) (agent.CodeGenerationResult, error) {
+		if strings.Contains(task, "[TEST_GEN]") {
+			return testFiles(), nil
+		}
+		implCallCount++
+		if implCallCount == 1 {
+			return agent.CodeGenerationResult{}, fmt.Errorf("agent Coder: %w", llm.ErrJSONParse)
+		}
+		return implFiles(), nil
+	}}
+
+	exec := &stubExecutor{
+		responses: []execResponse{
+			{output: "FAIL", success: false}, // 初期実行 (Red)
+			{output: "ok", success: true},    // JSON エラー後の 2 回目 → Green
+		},
+	}
+
+	next := &stubState{}
+	s := &workflow.ImplementState{
+		Coder:  coder,
+		Exec:   exec,
+		Logger: logger.New(&strings.Builder{}),
+		Next:   next,
+	}
+
+	wfCtx := &workflow.Context{PlanText: "plan", Config: singleStepConfig()}
+	got, err := s.Execute(context.Background(), wfCtx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != next {
+		t.Errorf("expected Next state; got %v", got)
+	}
+	if implCallCount != 2 {
+		t.Errorf("implCallCount=%d; want 2 (1回 JSON エラー + 1回 成功)", implCallCount)
+	}
+}
+
+// funcCoderAgent は関数をバックエンドとする agent.CoderAgent スタブです。
+type funcCoderAgent struct {
+	fn func(ctx context.Context, task string) (agent.CodeGenerationResult, error)
+}
+
+func (a *funcCoderAgent) GenerateCode(ctx context.Context, task string) (agent.CodeGenerationResult, error) {
 	return a.fn(ctx, task)
 }

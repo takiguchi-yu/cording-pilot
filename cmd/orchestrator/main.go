@@ -84,7 +84,7 @@ func run(requirement string, logDest *os.File, exec executor.Executor, cfg *conf
 	// ── Agent Factory ────────────────────────────────────────────────────────
 	factory := agent.NewFactory(llmClient)
 	planner := factory.NewPlanner()
-	coder := factory.NewCoder()
+	coder := factory.NewCoderAgent()
 	reviewer := factory.NewReviewer()
 
 	// ── State Graph (wired bottom-up to avoid forward references) ────────────
