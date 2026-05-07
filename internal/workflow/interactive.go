@@ -4,12 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/huh"
 	"github.com/takiguchi-yu/cording-pilot/internal/agent"
 	githubpkg "github.com/takiguchi-yu/cording-pilot/internal/github"
 	"github.com/takiguchi-yu/cording-pilot/internal/tui"
 	"github.com/takiguchi-yu/cording-pilot/pkg/logger"
+)
+
+const (
+	issueTypeFeature = "feature"
+	issueTypeBug     = "bug"
 )
 
 // InteractiveState は ⓪ 対話フェーズです。
@@ -32,6 +40,10 @@ type InteractiveState struct {
 	RepoOwner string
 	// RepoName はリポジトリ名です。
 	RepoName string
+	// SelectIssueType は Issue 種別の選択関数です。nil の場合はデフォルトの TUI を使用します。
+	SelectIssueType func() (string, error)
+	// LoadIssueTemplate は Issue テンプレートを読み込む関数です。nil の場合はデフォルトのローダーを使用します。
+	LoadIssueTemplate func(issueType string) (string, error)
 }
 
 // Execute implements State.
@@ -49,6 +61,23 @@ func (s *InteractiveState) Execute(ctx context.Context, wfCtx *Context) (State, 
 		return s.fetchIssue(ctx, wfCtx)
 	}
 
+	// ── Step 0.5: Issue 種別を選択してテンプレートを読み込む ─────────────────────
+	issueType, err := s.selectIssueType()
+	if err != nil {
+		if errors.Is(err, tui.ErrAborted) {
+			return nil, fmt.Errorf("interactive: %w", tui.ErrAborted)
+		}
+		return nil, fmt.Errorf("interactive: select issue type: %w", err)
+	}
+
+	templateContent, err := s.loadIssueTemplate(issueType)
+	if err != nil {
+		templateContent = ""
+		if logErr := s.Logger.Warn("interactive.template_load_failed", fmt.Sprintf("Issue テンプレートの読み込みに失敗しました: %v", err)); logErr != nil {
+			return nil, logErr
+		}
+	}
+
 	// ── Step 1: 要件の不足を分析して質問リストを生成 ────────────────────────────
 	clarification, err := s.Planner.GenerateClarification(ctx, wfCtx.Requirement)
 	if err != nil {
@@ -60,6 +89,11 @@ func (s *InteractiveState) Execute(ctx context.Context, wfCtx *Context) (State, 
 		if err = s.Logger.Info("interactive.skip", "要件が十分明確なため、ヒアリングをスキップします"); err != nil {
 			return nil, err
 		}
+		compiled, compileErr := s.Planner.CompileIssue(ctx, wfCtx.Requirement, map[string]string{}, templateContent)
+		if compileErr != nil {
+			return nil, fmt.Errorf("interactive: compile issue: %w", compileErr)
+		}
+		wfCtx.Requirement = compiled
 		if err = s.maybeCreateIssue(ctx, wfCtx); err != nil {
 			return nil, err
 		}
@@ -85,7 +119,7 @@ func (s *InteractiveState) Execute(ctx context.Context, wfCtx *Context) (State, 
 	}
 
 	// ── Step 4: 回答を元に最終的な実装計画（Issue）をコンパイル ─────────────────
-	compiled, err := s.Planner.CompileIssue(ctx, wfCtx.Requirement, answers)
+	compiled, err := s.Planner.CompileIssue(ctx, wfCtx.Requirement, answers, templateContent)
 	if err != nil {
 		return nil, fmt.Errorf("interactive: compile issue: %w", err)
 	}
@@ -102,6 +136,53 @@ func (s *InteractiveState) Execute(ctx context.Context, wfCtx *Context) (State, 
 	}
 
 	return s.Next, nil
+}
+
+func (s *InteractiveState) selectIssueType() (string, error) {
+	if s.SelectIssueType != nil {
+		return s.SelectIssueType()
+	}
+
+	issueType := issueTypeFeature
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Issue 種別を選択してください").
+				Description("開始するタスクに合わせてテンプレートを切り替えます").
+				Options(
+					huh.NewOption("Feature (新規実装)", issueTypeFeature),
+					huh.NewOption("Bug (バグ対応)", issueTypeBug),
+				).
+				Value(&issueType),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		if errors.Is(err, huh.ErrUserAborted) {
+			return "", tui.ErrAborted
+		}
+		return "", fmt.Errorf("interactive: run issue type select: %w", err)
+	}
+
+	return issueType, nil
+}
+
+func (s *InteractiveState) loadIssueTemplate(issueType string) (string, error) {
+	if s.LoadIssueTemplate != nil {
+		return s.LoadIssueTemplate(issueType)
+	}
+
+	if issueType == "" {
+		return "", nil
+	}
+
+	path := filepath.Join(".github", "ISSUE_TEMPLATE", issueType+".md")
+	data, err := os.ReadFile(path) // #nosec G304 -- issueType は固定選択肢から選ばれる
+	if err != nil {
+		return "", fmt.Errorf("interactive: read template %q: %w", path, err)
+	}
+
+	return string(data), nil
 }
 
 // fetchIssue は GitHub から Issue を取得し、本文を Requirement に設定します。

@@ -26,7 +26,7 @@ func (s *stubPlannerAgent) GenerateClarification(_ context.Context, _ string) (a
 	return s.clarification, s.clarifyErr
 }
 
-func (s *stubPlannerAgent) CompileIssue(_ context.Context, _ string, _ map[string]string) (string, error) {
+func (s *stubPlannerAgent) CompileIssue(_ context.Context, _ string, _ map[string]string, _ string) (string, error) {
 	return s.compiledIssue, s.compileErr
 }
 
@@ -39,11 +39,18 @@ func TestInteractiveState_要件が明確な場合スキップ(t *testing.T) {
 	}
 	stub := &stubPlannerAgent{
 		clarification: agent.ClarificationRequest{IsClear: true},
+		compiledIssue: "# タイトル\n\n本文",
 	}
 	s := &workflow.InteractiveState{
 		Planner: stub,
 		Logger:  newLogger(),
 		Next:    nextState,
+		SelectIssueType: func() (string, error) {
+			return "feature", nil
+		},
+		LoadIssueTemplate: func(string) (string, error) {
+			return "", nil
+		},
 	}
 
 	wfCtx := &workflow.Context{Requirement: "明確な要件"}
@@ -54,9 +61,8 @@ func TestInteractiveState_要件が明確な場合スキップ(t *testing.T) {
 	if next != nextState {
 		t.Error("expected nextState to be returned")
 	}
-	// Requirement は変更されないはず。
-	if wfCtx.Requirement != "明確な要件" {
-		t.Errorf("requirement should not change; got %q", wfCtx.Requirement)
+	if wfCtx.Requirement != "# タイトル\n\n本文" {
+		t.Errorf("unexpected compiled requirement: %q", wfCtx.Requirement)
 	}
 }
 
@@ -69,11 +75,18 @@ func TestInteractiveState_質問が空の場合スキップ(t *testing.T) {
 	}
 	stub := &stubPlannerAgent{
 		clarification: agent.ClarificationRequest{IsClear: false, Questions: nil},
+		compiledIssue: "# タイトル\n\n本文",
 	}
 	s := &workflow.InteractiveState{
 		Planner: stub,
 		Logger:  newLogger(),
 		Next:    nextState,
+		SelectIssueType: func() (string, error) {
+			return "feature", nil
+		},
+		LoadIssueTemplate: func(string) (string, error) {
+			return "", nil
+		},
 	}
 
 	wfCtx := &workflow.Context{Requirement: "要件"}
@@ -94,6 +107,12 @@ func TestInteractiveState_GenerateClarification失敗時にエラーを返す(t 
 	s := &workflow.InteractiveState{
 		Planner: stub,
 		Logger:  newLogger(),
+		SelectIssueType: func() (string, error) {
+			return "feature", nil
+		},
+		LoadIssueTemplate: func(string) (string, error) {
+			return "", nil
+		},
 	}
 
 	_, err := s.Execute(context.Background(), &workflow.Context{Requirement: "要件"})
@@ -105,8 +124,16 @@ func TestInteractiveState_GenerateClarification失敗時にエラーを返す(t 
 func TestInteractiveState_ユーザー中断時にErrAbortedを返す(t *testing.T) {
 	t.Parallel()
 
-	// questions があるが RunForm が ErrAborted を返す状況を再現するため、
-	// formRunner フィールドを使わず InteractiveState 自体の ErrAborted 伝播をテストします。
-	// ここでは CompileIssue を呼ばずに早期リターンされることを確認します。
-	_ = tui.ErrAborted // パッケージのインポートを維持するためのダミー参照
+	s := &workflow.InteractiveState{
+		Planner: &stubPlannerAgent{},
+		Logger:  newLogger(),
+		SelectIssueType: func() (string, error) {
+			return "", tui.ErrAborted
+		},
+	}
+
+	_, err := s.Execute(context.Background(), &workflow.Context{Requirement: "要件"})
+	if !errors.Is(err, tui.ErrAborted) {
+		t.Errorf("expected wrapped error %v; got %v", tui.ErrAborted, err)
+	}
 }

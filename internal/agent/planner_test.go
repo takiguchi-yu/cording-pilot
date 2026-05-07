@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/takiguchi-yu/cording-pilot/internal/agent"
@@ -16,9 +17,11 @@ type plannerStubLLM struct {
 	compiledIssue string
 	generateErr   error
 	structuredErr error
+	lastPrompt    string
 }
 
-func (s *plannerStubLLM) Generate(_ context.Context, _ string) (string, error) {
+func (s *plannerStubLLM) Generate(_ context.Context, prompt string) (string, error) {
+	s.lastPrompt = prompt
 	return s.compiledIssue, s.generateErr
 }
 
@@ -96,12 +99,15 @@ func TestFactory_NewPlannerAgent_CompileIssue_成功(t *testing.T) {
 	f := agent.NewFactory(stub, config.DefaultGoConfig())
 	pa := f.NewPlannerAgent()
 
-	got, err := pa.CompileIssue(context.Background(), "初期要件", map[string]string{"q1": "新規機能"})
+	got, err := pa.CompileIssue(context.Background(), "初期要件", map[string]string{"q1": "新規機能"}, "## Overview")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got != "## 実装計画\n..." {
 		t.Errorf("unexpected compiled issue: %q", got)
+	}
+	if !strings.Contains(stub.lastPrompt, "## Overview") {
+		t.Errorf("prompt should include template content; got %q", stub.lastPrompt)
 	}
 }
 
@@ -113,7 +119,7 @@ func TestFactory_NewPlannerAgent_CompileIssue_LLMエラー時にエラーを返�
 	f := agent.NewFactory(stub, config.DefaultGoConfig())
 	pa := f.NewPlannerAgent()
 
-	_, err := pa.CompileIssue(context.Background(), "要件", map[string]string{})
+	_, err := pa.CompileIssue(context.Background(), "要件", map[string]string{}, "")
 	if !errors.Is(err, wantErr) {
 		t.Errorf("expected wrapped error %v; got %v", wantErr, err)
 	}

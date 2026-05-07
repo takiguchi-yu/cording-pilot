@@ -34,7 +34,7 @@ type PlannerAgent interface {
 	// GenerateClarification は要件を分析し、ユーザーへの確認事項を構造化して返します。
 	GenerateClarification(ctx context.Context, requirement string) (ClarificationRequest, error)
 	// CompileIssue はユーザーの回答を元に最終的な実装計画（Markdown 形式の擬似 Issue）を生成します。
-	CompileIssue(ctx context.Context, requirement string, answers map[string]string) (string, error)
+	CompileIssue(ctx context.Context, requirement string, answers map[string]string, templateContent string) (string, error)
 }
 
 // plannerAgentImpl は PlannerAgent の具象実装です。
@@ -74,9 +74,17 @@ func (p *plannerAgentImpl) GenerateClarification(ctx context.Context, requiremen
 }
 
 // CompileIssue implements PlannerAgent.
-func (p *plannerAgentImpl) CompileIssue(ctx context.Context, requirement string, answers map[string]string) (string, error) {
+func (p *plannerAgentImpl) CompileIssue(ctx context.Context, requirement string, answers map[string]string, templateContent string) (string, error) {
 	var sb strings.Builder
-	sb.WriteString("[COMPILE_ISSUE] 以下の要件とユーザーの回答を元に、実装計画（Markdown 形式の擬似 Issue）を生成してください。\n\n")
+	sb.WriteString("[COMPILE_ISSUE] 以下の要件とユーザーの回答を元に、実装計画（Markdown 形式の擬似 Issue）を生成してください。\n")
+	sb.WriteString("以下の Issue テンプレートの構成・見出しに厳密に従って出力してください。\n\n")
+	sb.WriteString("## Issue テンプレート\n\n")
+	if strings.TrimSpace(templateContent) == "" {
+		sb.WriteString("(テンプレート未指定。一般的な見出し構成で Markdown の Issue を作成してください)\n\n")
+	} else {
+		sb.WriteString(templateContent)
+		sb.WriteString("\n\n")
+	}
 	sb.WriteString("## 初期要件\n\n")
 	sb.WriteString(requirement)
 	sb.WriteString("\n\n## ユーザーの回答\n\n")
