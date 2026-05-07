@@ -18,6 +18,61 @@ type mockCodeResult struct {
 	Files []mockFile `json:"files"`
 }
 
+// mockQuestion は ClarificationRequest 内の単一質問を表します。
+type mockQuestion struct {
+	ID      string   `json:"id"`
+	Text    string   `json:"text"`
+	Type    string   `json:"type"`
+	Options []string `json:"options"`
+}
+
+// mockClarificationResultType は GenerateStructured が [CLARIFY] キーワードで返す型です。
+type mockClarificationResultType struct {
+	Questions []mockQuestion `json:"questions"`
+	IsClear   bool           `json:"is_clear"`
+}
+
+// mockClarificationResult は [CLARIFY] キーワードへのデフォルトレスポンスです。
+var mockClarificationResult = mockClarificationResultType{
+	IsClear: false,
+	Questions: []mockQuestion{
+		{
+			ID:   "scope",
+			Text: "実装のスコープを教えてください（新規機能 / 既存機能の改修 / バグ修正）",
+			Type: "select",
+			Options: []string{
+				"新規機能",
+				"既存機能の改修",
+				"バグ修正",
+			},
+		},
+		{
+			ID:   "test_required",
+			Text: "テストコードも一緒に生成しますか？",
+			Type: "confirm",
+		},
+		{
+			ID:   "additional_notes",
+			Text: "その他の補足事項があれば入力してください（任意）",
+			Type: "text",
+		},
+	},
+}
+
+const mockCompiledIssue = `## 実装計画（ユーザー回答を反映）
+
+### 概要
+ユーザーのヒアリング結果を元に要件を確定しました。
+
+### 仕様
+- 入力: 任意の文字列（UTF-8）
+- 出力: UTF-8文字単位で逆順にした文字列
+- エッジケース: 空文字、1文字、マルチバイト文字
+- テストコード: あり
+
+### 影響範囲
+- 新規ファイル: task.go / task_test.go`
+
 const mockTestCodeContent = `package task
 
 import "testing"
@@ -112,16 +167,30 @@ func (m *MockClient) Generate(_ context.Context, prompt string) (string, error) 
 		return mockReviewApprove, nil
 	case strings.Contains(lower, "[plan]") || strings.Contains(lower, "実装計画を作成"):
 		return mockPlanText, nil
+	case strings.Contains(lower, "[compile_issue]"):
+		return mockCompiledIssue, nil
 	default:
 		return "", nil
 	}
 }
 
-// GenerateStructured はプロンプト中のキーワードに基づいた CodeGenerationResult 相当の
-// JSON を target にデコードします。
-// JSON デコードに失敗した場合は ErrJSONParse をラップしたエラーを返します。
+// GenerateStructured はプロンプト中のキーワードに基づいた JSON を target にデコードします。
+// [CLARIFY] キーワードには ClarificationRequest を、それ以外には CodeGenerationResult 相当の
+// JSON を返します。JSON デコードに失敗した場合は ErrJSONParse をラップしたエラーを返します。
 func (m *MockClient) GenerateStructured(_ context.Context, prompt string, target interface{}) error {
 	lower := strings.ToLower(taskPart(prompt))
+
+	if strings.Contains(lower, "[clarify]") {
+		result := mockClarificationResult
+		data, err := json.Marshal(result)
+		if err != nil {
+			return fmt.Errorf("%w: marshal clarification: %v", ErrJSONParse, err)
+		}
+		if err = json.Unmarshal(data, target); err != nil {
+			return fmt.Errorf("%w: %v", ErrJSONParse, err)
+		}
+		return nil
+	}
 
 	var result mockCodeResult
 	if strings.Contains(lower, "[test_gen]") {

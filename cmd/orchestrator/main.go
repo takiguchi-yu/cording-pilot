@@ -83,7 +83,7 @@ func run(requirement string, logDest *os.File, exec executor.Executor, cfg *conf
 
 	// ── Agent Factory ────────────────────────────────────────────────────────
 	factory := agent.NewFactory(llmClient)
-	planner := factory.NewPlanner()
+	planner := factory.NewPlannerAgent()
 	coder := factory.NewCoderAgent()
 	reviewer := factory.NewReviewer()
 
@@ -117,6 +117,12 @@ func run(requirement string, logDest *os.File, exec executor.Executor, cfg *conf
 		Next:    implementState,
 	}
 
+	interactiveState := &workflow.InteractiveState{
+		Planner: planner,
+		Logger:  log,
+		Next:    planState,
+	}
+
 	// ── Workflow Context ─────────────────────────────────────────────────────
 	wfCtx := &workflow.Context{
 		Requirement: requirement,
@@ -125,5 +131,5 @@ func run(requirement string, logDest *os.File, exec executor.Executor, cfg *conf
 
 	// ── Runner ───────────────────────────────────────────────────────────────
 	runner := workflow.NewRunner()
-	return runner.Run(context.Background(), planState, wfCtx)
+	return runner.Run(context.Background(), interactiveState, wfCtx)
 }
