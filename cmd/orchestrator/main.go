@@ -16,11 +16,13 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
 
 	"github.com/takiguchi-yu/cording-pilot/internal/agent"
+	"github.com/takiguchi-yu/cording-pilot/internal/config"
 	"github.com/takiguchi-yu/cording-pilot/internal/executor"
 	"github.com/takiguchi-yu/cording-pilot/internal/llm"
 	"github.com/takiguchi-yu/cording-pilot/internal/workflow"
@@ -28,11 +30,33 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, `Usage: orchestrator "<requirement>"`)
+	useDocker := flag.Bool("docker", false, "ローカルの代わりに Docker Executor を使用する")
+	dockerImage := flag.String("docker-image", "", "Docker Executor で使用するイメージ（省略時は設定ファイルの image を使用）")
+	configPath := flag.String("config", config.DefaultConfigFileName, "プロジェクト設定ファイルのパス")
+	flag.Parse()
+
+	if flag.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, `Usage: orchestrator [--docker] [--docker-image IMAGE] [--config PATH] "<requirement>"`)
 		os.Exit(1)
 	}
-	requirement := os.Args[1]
+	requirement := flag.Arg(0)
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("failed to load config: %v", err)
+	}
+
+	// --docker-image フラグが明示指定された場合は設定ファイルの値を上書きする。
+	if *dockerImage != "" {
+		cfg.Environment.Image = *dockerImage
+	}
+
+	var exec executor.Executor
+	if *useDocker {
+		exec = executor.NewDockerExecutor(cfg.Environment.Image)
+	} else {
+		exec = executor.NewLocalExecutor()
+	}
 
 	logFile, err := os.Create("run.ndjson")
 	if err != nil {
@@ -44,7 +68,7 @@ func main() {
 		}
 	}()
 
-	if runErr := run(requirement, logFile); runErr != nil {
+	if runErr := run(requirement, logFile, exec, cfg); runErr != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", runErr)
 		os.Exit(1)
 	}
@@ -52,10 +76,9 @@ func main() {
 
 // run は依存関係グラフ（DI コンテナー）を構築してワークフローを開始します。
 // main から分離することで、注入ロジックをテストで独立して検証できるようにしています。
-func run(requirement string, logDest *os.File) error {
+func run(requirement string, logDest *os.File, exec executor.Executor, cfg *config.Config) error {
 	// ── Strategies ──────────────────────────────────────────────────────────
 	llmClient := llm.NewMockClient()
-	exec := executor.NewLocalExecutor()
 	log := logger.New(logDest)
 
 	// ── Agent Factory ────────────────────────────────────────────────────────
@@ -97,6 +120,7 @@ func run(requirement string, logDest *os.File) error {
 	// ── Workflow Context ─────────────────────────────────────────────────────
 	wfCtx := &workflow.Context{
 		Requirement: requirement,
+		Config:      cfg,
 	}
 
 	// ── Runner ───────────────────────────────────────────────────────────────

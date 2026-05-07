@@ -3,6 +3,8 @@
 // 具象的な State として表現されます。
 package workflow
 
+import "github.com/takiguchi-yu/cording-pilot/internal/config"
+
 // Context は State 間で持ち回す全ての可変データを保持します。
 // Redux の Store に相当する役割を杉たします。
 type Context struct {
@@ -18,4 +20,6 @@ type Context struct {
 	TryCount int
 	// ReviewFeedback は Reviewer エージェントからの最新のレビュー結果です。
 	ReviewFeedback string
+	// Config は .cording-pilot.yml から読み込んだプロジェクト設定です。
+	Config *config.Config
 }

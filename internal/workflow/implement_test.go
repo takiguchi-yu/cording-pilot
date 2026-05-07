@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/takiguchi-yu/cording-pilot/internal/config"
 	"github.com/takiguchi-yu/cording-pilot/internal/workflow"
 	"github.com/takiguchi-yu/cording-pilot/pkg/logger"
 )
@@ -30,6 +31,19 @@ func (s *stubExecutor) Run(_ context.Context, _, _ string, _ ...string) (string,
 	r := s.responses[s.callCount]
 	s.callCount++
 	return r.output, r.success, r.err
+}
+
+// singleStepConfig はテスト用のシンプルな 1 ステップパイプライン設定です。
+// この config を Context に注入することで、テストの stubExecutor の呼び出し回数が
+// デフォルトの 4 ステップ設定の影響を受けないようにします。
+func singleStepConfig() *config.Config {
+	return &config.Config{
+		Version:     "1.0",
+		Environment: config.Environment{Image: "golang:1.22"},
+		Pipeline: []config.PipelineStep{
+			{Name: "test", Command: "go test ./..."},
+		},
+	}
 }
 
 func TestImplementState_Execute_初回イテレーションで成功する(t *testing.T) {
@@ -60,7 +74,7 @@ func TestImplementState_Execute_初回イテレーションで成功する(t *te
 		Next:   next,
 	}
 
-	wfCtx := &workflow.Context{PlanText: "some plan"}
+	wfCtx := &workflow.Context{PlanText: "some plan", Config: singleStepConfig()}
 	got, err := s.Execute(context.Background(), wfCtx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -100,7 +114,7 @@ func TestImplementState_Execute_Fixループ上限到達でエラーを返す(t 
 		Next:   &stubState{},
 	}
 
-	_, err := s.Execute(context.Background(), &workflow.Context{PlanText: "plan"})
+	_, err := s.Execute(context.Background(), &workflow.Context{PlanText: "plan", Config: singleStepConfig()})
 	if err == nil {
 		t.Fatal("expected error when Fix Loop is exhausted, got nil")
 	}
@@ -124,7 +138,7 @@ func TestImplementState_Execute_テストレスポンスにコードブロック
 		Next:   &stubState{},
 	}
 
-	_, err := s.Execute(context.Background(), &workflow.Context{PlanText: "plan"})
+	_, err := s.Execute(context.Background(), &workflow.Context{PlanText: "plan", Config: singleStepConfig()})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -145,7 +159,7 @@ func TestImplementState_Execute_テスト生成エージェントエラー時に
 		Next:   &stubState{},
 	}
 
-	_, err := s.Execute(context.Background(), &workflow.Context{PlanText: "plan"})
+	_, err := s.Execute(context.Background(), &workflow.Context{PlanText: "plan", Config: singleStepConfig()})
 	if err == nil {
 		t.Fatal("エラーを期待しましたが nil でした")
 	}
@@ -178,7 +192,7 @@ func TestImplementState_Execute_初期テスト実行インフラエラー時に
 		Next:   &stubState{},
 	}
 
-	_, err := s.Execute(context.Background(), &workflow.Context{PlanText: "plan"})
+	_, err := s.Execute(context.Background(), &workflow.Context{PlanText: "plan", Config: singleStepConfig()})
 	if err == nil {
 		t.Fatal("エラーを期待しましたが nil でした")
 	}
@@ -212,7 +226,7 @@ func TestImplementState_Execute_実装コード生成エージェントエラー
 		Next:   &stubState{},
 	}
 
-	_, err := s.Execute(context.Background(), &workflow.Context{PlanText: "plan"})
+	_, err := s.Execute(context.Background(), &workflow.Context{PlanText: "plan", Config: singleStepConfig()})
 	if err == nil {
 		t.Fatal("エラーを期待しましたが nil でした")
 	}
@@ -246,7 +260,7 @@ func TestImplementState_Execute_Fixループでインフラエラー時にエラ
 		Next:   &stubState{},
 	}
 
-	_, err := s.Execute(context.Background(), &workflow.Context{PlanText: "plan"})
+	_, err := s.Execute(context.Background(), &workflow.Context{PlanText: "plan", Config: singleStepConfig()})
 	if err == nil {
 		t.Fatal("エラーを期待しましたが nil でした")
 	}

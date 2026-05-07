@@ -1,3 +1,17 @@
 {
-  "cSpell.words": ["analysing", "autonumber", "direnv", "Errorf", "Fatalf", "gofmt", "goimports", "golangci", "nixos", "pkgs", "Println", "specialised"]
+  "cSpell.words": [
+    "analysing",
+    "autonumber",
+    "direnv",
+    "Errorf",
+    "Fatalf",
+    "gofmt",
+    "goimports",
+    "golangci",
+    "nixos",
+    "pkgs",
+    "Println",
+    "specialised",
+    "worktrees"
+  ]
 }

@@ -1,0 +1,19 @@
+version: "1.0"
+
+environment:
+  # Docker コンテナ実行時に使用するイメージ。
+  # golangci-lint イメージには go, golangci-lint, goimports が含まれています。
+  image: "golangci/golangci-lint:latest"
+
+pipeline:
+  - name: "format"
+    command: "go fmt ./..."
+
+  - name: "typecheck"
+    command: "go build ./..."
+
+  - name: "lint"
+    command: "golangci-lint run"
+
+  - name: "test"
+    command: "go test -v ./..."
