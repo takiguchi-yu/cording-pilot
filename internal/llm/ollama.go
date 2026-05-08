@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"unicode/utf8"
 
 	openai "github.com/sashabaranov/go-openai"
 	"github.com/takiguchi-yu/cording-pilot/pkg/logger"
@@ -17,6 +18,7 @@ const (
 	DefaultOllamaBaseURL = "http://localhost:11434/v1"
 	ollamaDummyAPIKey    = "ollama-dummy-key"
 	defaultOllamaModel   = "llama3.1:8b"
+	maxOllamaPromptChars = 4000
 )
 
 // OllamaClient は Ollama の OpenAI 互換 API を利用する llm.Client 実装です。
@@ -51,12 +53,13 @@ func NewOllamaClient(model, baseURL string, log *logger.Logger) (*OllamaClient, 
 
 // Generate implements Client.
 func (c *OllamaClient) Generate(ctx context.Context, prompt string) (string, error) {
-	_ = c.log.Debug("llm.ollama.generate.request", fmt.Sprintf("prompt=%q", prompt))
+	limitedPrompt := truncateForOllamaContext(prompt, maxOllamaPromptChars)
+	_ = c.log.Debug("llm.ollama.generate.request", fmt.Sprintf("prompt=%q", limitedPrompt))
 
 	resp, err := c.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model: c.model,
 		Messages: []openai.ChatCompletionMessage{
-			{Role: openai.ChatMessageRoleUser, Content: prompt},
+			{Role: openai.ChatMessageRoleUser, Content: limitedPrompt},
 		},
 	})
 	if err != nil {
@@ -71,6 +74,8 @@ func (c *OllamaClient) Generate(ctx context.Context, prompt string) (string, err
 // GenerateStructured implements Client.
 // Ollama では Strict JSON Schema モードを使わず、json_object + プロンプト指示で構造化出力を強制します。
 func (c *OllamaClient) GenerateStructured(ctx context.Context, prompt string, target interface{}) error {
+	limitedPrompt := truncateForOllamaContext(prompt, maxOllamaPromptChars)
+
 	schema := jsonSchemaFromValue(target)
 	schemaBytes, err := json.Marshal(schema)
 	if err != nil {
@@ -80,13 +85,13 @@ func (c *OllamaClient) GenerateStructured(ctx context.Context, prompt string, ta
 	schemaInstruction := "【重要】以下の JSON スキーマに厳密に従う JSON 文字列のみを出力してください。" +
 		" Markdown コードブロック（```json 等）や説明文は含めないでください。\n" + string(schemaBytes)
 
-	_ = c.log.Debug("llm.ollama.generateStructured.request", fmt.Sprintf("prompt=%q schema=%s", prompt, schemaBytes))
+	_ = c.log.Debug("llm.ollama.generateStructured.request", fmt.Sprintf("prompt=%q schema=%s", limitedPrompt, schemaBytes))
 
 	resp, err := c.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model: c.model,
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleSystem, Content: schemaInstruction},
-			{Role: openai.ChatMessageRoleUser, Content: prompt},
+			{Role: openai.ChatMessageRoleUser, Content: limitedPrompt},
 		},
 		ResponseFormat: &openai.ChatCompletionResponseFormat{
 			Type: openai.ChatCompletionResponseFormatTypeJSONObject,
@@ -124,4 +129,32 @@ func wrapOllamaAPIError(operation string, err error) error {
 	}
 
 	return fmt.Errorf("%s: %w", operation, err)
+}
+
+func truncateForOllamaContext(prompt string, maxChars int) string {
+	if maxChars <= 0 {
+		return prompt
+	}
+
+	runeCount := utf8.RuneCountInString(prompt)
+	if runeCount <= maxChars {
+		return prompt
+	}
+
+	const marker = "\n\n[truncated for ollama context guard]\n\n"
+	headChars := maxChars * 3 / 4
+	if headChars < 1 {
+		headChars = 1
+	}
+	tailChars := maxChars - headChars
+	if tailChars < 1 {
+		tailChars = 1
+	}
+
+	runes := []rune(prompt)
+	if len(runes) <= headChars+tailChars {
+		return string(runes[:maxChars])
+	}
+
+	return string(runes[:headChars]) + marker + string(runes[len(runes)-tailChars:])
 }

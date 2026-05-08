@@ -2,7 +2,7 @@
 
 # Go packages excluding paths managed by Nix/direnv
 GO_PKGS := $(shell go list ./... | grep -v '\.direnv')
-OLLAMA_MODEL ?= qwen3-coder-next
+OLLAMA_MODEL ?= qwen3-coder-next:q4_K_M
 OLLAMA_LOG ?= /tmp/ollama-serve.log
 
 ## build: compile all packages
@@ -26,8 +26,17 @@ ollama-serve:
 	@if pgrep -f "ollama serve" >/dev/null; then \
 		echo "Ollama server is already running."; \
 	else \
-		nohup ollama serve >$(OLLAMA_LOG) 2>&1 & \
+		OLLAMA_NUM_PARALLEL=1 OLLAMA_MAX_QUEUE=1 nohup ollama serve >$(OLLAMA_LOG) 2>&1 & \
 		echo "Ollama server started in background. log=$(OLLAMA_LOG)"; \
+	fi
+
+## ollama-stop: stop Ollama server
+ollama-stop:
+	@if pgrep -f "ollama serve" >/dev/null; then \
+		pkill -f "ollama serve"; \
+		echo "Ollama server stopped."; \
+	else \
+		echo "Ollama server is not running."; \
 	fi
 
 ## ollama-pull: ensure server is up and pull the recommended coding model

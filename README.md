@@ -126,6 +126,16 @@ knowledge:
 
 既定では `internal/config.DefaultGoConfig()` のパイプライン (`goimports`, `go fmt`, `go build`, `golangci-lint`, `go test`) が使われます。
 
+## Ollama 利用時の推奨設定
+
+- `make ollama-pull` は既定で `qwen3-coder-next:q4_K_M` を取得します。
+- `make ollama-serve` は `OLLAMA_NUM_PARALLEL=1` と `OLLAMA_MAX_QUEUE=1` で起動し、PC 全体の負荷上昇を抑えます。
+- 動作が重い場合は、より小さいモデルへ変更して起動してください（例: `3b`）。
+
+```bash
+OLLAMA_MODEL=qwen3:3b make ollama-pull
+```
+
 ## 実行ログと中断
 
 - 実行ログはカレントディレクトリの `run.ndjson` に NDJSON 形式で出力されます。

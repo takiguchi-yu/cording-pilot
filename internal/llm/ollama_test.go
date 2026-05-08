@@ -123,3 +123,133 @@ func TestOllamaClient_Generate_接続不能時は分かりやすいエラーを�
 		t.Fatalf("unexpected error message: %v", err)
 	}
 }
+
+func TestOllamaClient_Generate_長大プロンプトはコンテキスト保護のため切り詰める(t *testing.T) {
+	t.Parallel()
+
+	type requestBody struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+
+	var captured requestBody
+	var decodeErr error
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		decodeErr = json.NewDecoder(r.Body).Decode(&captured)
+		resp := map[string]any{
+			"id":      "chatcmpl-1",
+			"object":  "chat.completion",
+			"created": 0,
+			"model":   "llama3.1:8b",
+			"choices": []map[string]any{{
+				"index": 0,
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": "ok",
+				},
+				"finish_reason": "stop",
+			}},
+		}
+		payload, err := json.Marshal(resp)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	log := logger.New(&strings.Builder{})
+	client, err := llm.NewOllamaClient("llama3.1:8b", server.URL+"/v1", log)
+	if err != nil {
+		t.Fatalf("client create error: %v", err)
+	}
+
+	longPrompt := strings.Repeat("a", 5000)
+	_, err = client.Generate(context.Background(), longPrompt)
+	if err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+	if decodeErr != nil {
+		t.Fatalf("request decode error: %v", decodeErr)
+	}
+	if len(captured.Messages) != 1 {
+		t.Fatalf("messages len=%d; want 1", len(captured.Messages))
+	}
+	if !strings.Contains(captured.Messages[0].Content, "[truncated for ollama context guard]") {
+		t.Fatalf("prompt should contain truncation marker")
+	}
+	if len([]rune(captured.Messages[0].Content)) >= len([]rune(longPrompt)) {
+		t.Fatalf("prompt should be truncated")
+	}
+}
+
+func TestOllamaClient_GenerateStructured_長大プロンプトはコンテキスト保護のため切り詰める(t *testing.T) {
+	t.Parallel()
+
+	type requestBody struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+
+	var captured requestBody
+	var decodeErr error
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		decodeErr = json.NewDecoder(r.Body).Decode(&captured)
+		resp := map[string]any{
+			"id":      "chatcmpl-1",
+			"object":  "chat.completion",
+			"created": 0,
+			"model":   "llama3.1:8b",
+			"choices": []map[string]any{{
+				"index": 0,
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": "{\"files\":[]}",
+				},
+				"finish_reason": "stop",
+			}},
+		}
+		payload, err := json.Marshal(resp)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	log := logger.New(&strings.Builder{})
+	client, err := llm.NewOllamaClient("llama3.1:8b", server.URL+"/v1", log)
+	if err != nil {
+		t.Fatalf("client create error: %v", err)
+	}
+
+	var out struct {
+		Files []struct {
+			Path string `json:"path"`
+		} `json:"files"`
+	}
+	longPrompt := strings.Repeat("b", 5000)
+	if err := client.GenerateStructured(context.Background(), longPrompt, &out); err != nil {
+		t.Fatalf("GenerateStructured error: %v", err)
+	}
+	if decodeErr != nil {
+		t.Fatalf("request decode error: %v", decodeErr)
+	}
+	if len(captured.Messages) < 2 {
+		t.Fatalf("messages len=%d; want >=2", len(captured.Messages))
+	}
+	if !strings.Contains(captured.Messages[1].Content, "[truncated for ollama context guard]") {
+		t.Fatalf("user prompt should contain truncation marker")
+	}
+	if len([]rune(captured.Messages[1].Content)) >= len([]rune(longPrompt)) {
+		t.Fatalf("prompt should be truncated")
+	}
+}

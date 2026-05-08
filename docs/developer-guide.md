@@ -46,6 +46,15 @@ make run
 | `make ollama-serve` | Ollama サーバーをバックグラウンド起動      |
 | `make ollama-pull`  | 推奨 Ollama モデルを取得                   |
 
+### Ollama が重い場合の Tips
+
+- 既定の推奨モデルは `qwen3-coder-next:q4_K_M`（4bit 量子化）です。
+- それでも重い場合は、`OLLAMA_MODEL` をより小さいモデルに上書きしてください（例: `3b`）。
+
+```bash
+OLLAMA_MODEL=qwen3:3b make ollama-pull
+```
+
 ## アーキテクチャ概要
 
 | ディレクトリ        | 役割                                               |

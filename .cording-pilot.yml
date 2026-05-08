@@ -49,20 +49,20 @@ agents:
 llm:
   # [任意] 使用するプロバイダー: copilot / ollama。未指定時: "copilot"
   provider: "ollama"
-  # [任意] 既定モデル。未指定時: "gpt-4.1"
-  model: "qwen3-coder-next"
+  # [任意] 既定モデル。未指定時: "gpt-4.1"（Ollama利用時の推奨: qwen3-coder-next:q4_K_M）
+  model: "qwen3-coder-next:q4_K_M"
   # [任意] API ベース URL（例: Ollama）。未指定可。
   base_url: "http://localhost:11434/v1"
   # [任意] 自己修復フェーズ用モデル。未指定時: model を使用。
-  auto_fix_model: "qwen3-coder-next"
+  auto_fix_model: "qwen3-coder-next:q4_K_M"
   # [任意] Interactive の確認質問で使うモデル。未指定時: model を使用。
-  planner_clarification_model: "qwen3-coder-next"
+  planner_clarification_model: "qwen3-coder-next:q4_K_M"
   # [任意] Plan/CompileIssue で使うモデル。未指定時: model を使用。
-  planner_plan_model: "qwen3-coder-next"
+  planner_plan_model: "qwen3-coder-next:q4_K_M"
   # [任意] Coder で使うモデル。未指定時: model を使用。
-  coder_model: "qwen3-coder-next"
+  coder_model: "qwen3-coder-next:q4_K_M"
   # [任意] Reviewer で使うモデル。未指定時: model を使用。
-  reviewer_model: "qwen3-coder-next"
+  reviewer_model: "qwen3-coder-next:q4_K_M"
   # [任意] リトライ設定。
   retry:
     # [任意] 1 以上。未指定時: 3
