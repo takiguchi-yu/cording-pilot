@@ -394,6 +394,49 @@ func TestImplementState_Execute_同一条件では実装生成キャッシュを
 	}
 }
 
+func TestImplementState_Execute_大きな失敗出力は切り詰めて実装生成へ渡す(t *testing.T) {
+	t.Parallel()
+
+	largeFailureOutput := strings.Repeat("failure-line\n", 1200)
+	implPromptSeen := ""
+	coder := &funcCoderAgent{fn: func(_ context.Context, task string) (agent.CodeGenerationResult, error) {
+		if strings.Contains(task, "[TEST_GEN]") {
+			return testFiles(), nil
+		}
+		implPromptSeen = task
+		if strings.Contains(task, largeFailureOutput) {
+			return agent.CodeGenerationResult{}, errors.New("large failure output should have been truncated")
+		}
+		return implFiles(), nil
+	}}
+
+	exec := &stubExecutor{
+		responses: []execResponse{
+			{output: largeFailureOutput, success: false},
+			{output: "ok", success: true},
+		},
+	}
+
+	next := &stubState{}
+	s := &workflow.ImplementState{
+		Coder:  coder,
+		Exec:   exec,
+		Logger: logger.New(&strings.Builder{}),
+		Next:   next,
+	}
+
+	got, err := s.Execute(context.Background(), &workflow.Context{PlanText: "plan", Config: singleStepConfig()})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != next {
+		t.Errorf("expected Next state; got %v", got)
+	}
+	if !strings.Contains(implPromptSeen, "[truncated") {
+		t.Errorf("impl prompt should include truncation marker; got %q", implPromptSeen)
+	}
+}
+
 // funcCoderAgent は関数をバックエンドとする agent.CoderAgent スタブです。
 type funcCoderAgent struct {
 	fn func(ctx context.Context, task string) (agent.CodeGenerationResult, error)

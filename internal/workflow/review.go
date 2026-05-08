@@ -4,9 +4,17 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/takiguchi-yu/cording-pilot/internal/agent"
 	"github.com/takiguchi-yu/cording-pilot/pkg/logger"
+)
+
+const (
+	maxReviewRequirementChars = 2000
+	maxReviewPlanChars        = 2500
+	maxReviewTestOutputChars  = 3000
+	reviewLLMTimeout          = 2 * time.Minute
 )
 
 // ReviewState は ③ レビューフェーズです。
@@ -27,14 +35,20 @@ func (s *ReviewState) Execute(ctx context.Context, wfCtx *Context) (State, error
 		return nil, err
 	}
 
+	requirementForPrompt := compactPromptText(wfCtx.Requirement, maxReviewRequirementChars)
+	planForPrompt := compactPromptText(wfCtx.PlanText, maxReviewPlanChars)
+	testOutputForPrompt := compactPromptText(wfCtx.LastTestOutput, maxReviewTestOutputChars)
 	prompt := fmt.Sprintf(
 		"[REVIEW] 以下の要件と実装計画、テスト結果を元にコードレビューを行ってください。\n\n## 要件\n%s\n\n## 実装計画\n%s\n\n## テスト結果\n%s",
-		wfCtx.Requirement,
-		wfCtx.PlanText,
-		wfCtx.LastTestOutput,
+		requirementForPrompt,
+		planForPrompt,
+		testOutputForPrompt,
 	)
 
-	feedback, err := s.Reviewer.Ask(ctx, prompt)
+	reviewCtx, cancel := context.WithTimeout(ctx, reviewLLMTimeout)
+	defer cancel()
+
+	feedback, err := s.Reviewer.Ask(reviewCtx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("review: %w", err)
 	}

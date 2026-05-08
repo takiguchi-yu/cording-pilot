@@ -162,6 +162,40 @@ func TestReviewState_Execute_レビュアーエラー時にエラーを返す(t 
 	}
 }
 
+func TestReviewState_Execute_大きな入力は切り詰めてレビューへ渡す(t *testing.T) {
+	t.Parallel()
+
+	var promptSeen string
+	s := &workflow.ReviewState{
+		Reviewer: &funcReviewAgent{fn: func(_ context.Context, task string) (string, error) {
+			promptSeen = task
+			return "Approve", nil
+		}},
+		Logger:    newLogger(),
+		OnApprove: &stubState{},
+		OnReject:  &stubState{},
+	}
+
+	largeRequirement := strings.Repeat("requirement ", 400)
+	largePlan := strings.Repeat("plan ", 800)
+	largeTestOutput := strings.Repeat("test-output\n", 1200)
+
+	_, err := s.Execute(context.Background(), &workflow.Context{
+		Requirement:    largeRequirement,
+		PlanText:       largePlan,
+		LastTestOutput: largeTestOutput,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(promptSeen, "[truncated") {
+		t.Fatalf("review prompt should include truncation marker; got %q", promptSeen)
+	}
+	if strings.Contains(promptSeen, largeTestOutput) {
+		t.Fatalf("review prompt should not contain the full test output")
+	}
+}
+
 // ── CompleteState ─────────────────────────────────────────────────────────────
 
 func TestCompleteState_Execute_nilを返しワークフローを終了する(t *testing.T) {
@@ -288,4 +322,12 @@ type errState struct {
 
 func (e *errState) Execute(_ context.Context, _ *workflow.Context) (workflow.State, error) {
 	return nil, e.err
+}
+
+type funcReviewAgent struct {
+	fn func(ctx context.Context, task string) (string, error)
+}
+
+func (s *funcReviewAgent) Ask(ctx context.Context, task string) (string, error) {
+	return s.fn(ctx, task)
 }

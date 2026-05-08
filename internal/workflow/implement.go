@@ -16,7 +16,9 @@ import (
 )
 
 const (
-	maxTryCount = 3
+	maxTryCount           = 3
+	maxPlanPromptChars    = 2500
+	maxFailureOutputChars = 3000
 )
 
 // ImplementState は ② 実装フェーズ（Fix Loop 含む）です。
@@ -290,11 +292,13 @@ func (s *ImplementState) generateImplCode(ctx context.Context, wfCtx *Context) (
 	if cfg == nil {
 		cfg = config.DefaultGoConfig()
 	}
+	planForPrompt := compactPromptText(wfCtx.PlanText, maxPlanPromptChars)
+	failureOutputForPrompt := compactPromptText(wfCtx.LastTestOutput, maxFailureOutputChars)
 	prompt := fmt.Sprintf(
 		"以下の実装計画とパイプライン失敗の出力を元に、[%s] のプロダクトコードを生成してください。ファイルの拡張子やディレクトリ構造は対象言語のベストプラクティスおよび既存のリポジトリ構成に従うこと。\n\n## 実装計画\n%s\n\n## パイプライン出力\n%s",
 		cfg.Project.Language,
-		wfCtx.PlanText,
-		wfCtx.LastTestOutput,
+		planForPrompt,
+		failureOutputForPrompt,
 	)
 	result, err := s.Coder.GenerateCode(ctx, prompt)
 	if err != nil {
@@ -319,4 +323,30 @@ func (s *ImplementState) generateImplCodeWithCache(
 	}
 	cache[cacheKey] = result
 	return result, false, nil
+}
+
+func compactPromptText(text string, maxChars int) string {
+	trimmed := strings.TrimSpace(text)
+	if maxChars <= 0 || len([]rune(trimmed)) <= maxChars {
+		return trimmed
+	}
+
+	runes := []rune(trimmed)
+	headChars := maxChars / 2
+	tailChars := maxChars - headChars
+	if headChars < 1 {
+		headChars = 1
+	}
+	if tailChars < 1 {
+		tailChars = 1
+	}
+
+	head := strings.TrimSpace(string(runes[:headChars]))
+	tail := strings.TrimSpace(string(runes[len(runes)-tailChars:]))
+	removed := len(runes) - headChars - tailChars
+	if removed < 0 {
+		removed = 0
+	}
+
+	return fmt.Sprintf("%s\n\n... [truncated %d chars] ...\n\n%s", head, removed, tail)
 }
