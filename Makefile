@@ -2,7 +2,7 @@
 
 # Go packages excluding paths managed by Nix/direnv
 GO_PKGS := $(shell go list ./... | grep -v '\.direnv')
-OLLAMA_MODEL ?= qwen2.5-coder:7b
+OLLAMA_MODEL ?= qwen3-coder-next
 OLLAMA_LOG ?= /tmp/ollama-serve.log
 
 ## build: compile all packages
