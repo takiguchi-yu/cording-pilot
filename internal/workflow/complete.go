@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -100,8 +101,14 @@ func (s *CompleteState) pushAndCreatePR(ctx context.Context, wfCtx *Context) err
 		return fmt.Errorf("complete: git checkout: %w", err)
 	}
 
-	// ── 生成コードをコピー ────────────────────────────────────────────────────
-	if err = copyDir(wfCtx.WorkDir, cloneDir); err != nil {
+	// ── origDir（元のローカルリポジトリルート）を取得 ─────────────────────────
+	origDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("complete: get original dir: %w", err)
+	}
+
+	// ── 実装差分のみをコピー ──────────────────────────────────────────────────
+	if err = copyImplementedFiles(origDir, wfCtx.WorkDir, cloneDir); err != nil {
 		return fmt.Errorf("complete: copy generated files: %w", err)
 	}
 
@@ -126,7 +133,13 @@ func (s *CompleteState) pushAndCreatePR(ctx context.Context, wfCtx *Context) err
 
 	// ── PR 作成 ───────────────────────────────────────────────────────────────
 	title := buildPRTitle(wfCtx.IssueNumber)
-	pr, err := s.GitHub.CreatePullRequest(ctx, s.RepoOwner, s.RepoName, title, branchName, base, "")
+	if wfCtx.IssueNumber > 0 {
+		if issue, issueErr := s.GitHub.GetIssue(ctx, s.RepoOwner, s.RepoName, wfCtx.IssueNumber); issueErr == nil && issue.Title != "" {
+			title = issue.Title
+		}
+	}
+	body := buildPRBody(wfCtx.IssueNumber, origDir)
+	pr, err := s.GitHub.CreatePullRequest(ctx, s.RepoOwner, s.RepoName, title, branchName, base, body)
 	if err != nil {
 		return fmt.Errorf("complete: create PR: %w", err)
 	}
@@ -174,6 +187,160 @@ func runGitCmd(ctx context.Context, dir string, args ...string) error {
 	return nil
 }
 
+// isExcludedRel は rel パスが除外対象（.git, .worktrees, .direnv）かどうかを返します。
+func isExcludedRel(rel string) bool {
+	for _, ex := range []string{".git", ".worktrees", ".direnv"} {
+		if rel == ex || strings.HasPrefix(rel, ex+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// fileContentDiffers はファイル a と b の内容が異なるかどうかを返します。
+// 呼び出し前にファイルサイズで事前フィルタを行うことを推奨します。
+func fileContentDiffers(a, b string) (bool, error) {
+	ab, err := os.ReadFile(a) // #nosec G304 — 内部で構築したパス
+	if err != nil {
+		return false, fmt.Errorf("fileContentDiffers: read a: %w", err)
+	}
+	bb, err := os.ReadFile(b) // #nosec G304 — 内部で構築したパス
+	if err != nil {
+		return false, fmt.Errorf("fileContentDiffers: read b: %w", err)
+	}
+	return !bytes.Equal(ab, bb), nil
+}
+
+// copyImplementedFiles は origDir と workDir を比較し、AI が変更・追加・削除した
+// ファイルのみを dst に反映します。
+// 変更・追加ファイルは dst にコピーし、AI が削除したファイルは dst から os.Remove します。
+// .git, .worktrees, .direnv はすべての操作でスキップします。
+func copyImplementedFiles(origDir, workDir, dst string) error {
+	// ── Phase 1: workDir を歩いて変更・追加ファイルを dst にコピー ────────────
+	if err := filepath.WalkDir(workDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		rel, err := filepath.Rel(workDir, path)
+		if err != nil {
+			return fmt.Errorf("copyImplementedFiles: rel: %w", err)
+		}
+
+		if isExcludedRel(rel) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		destPath := filepath.Join(dst, rel)
+
+		if d.IsDir() {
+			return os.MkdirAll(destPath, 0o755)
+		}
+
+		origPath := filepath.Join(origDir, rel)
+		origInfo, statErr := os.Stat(origPath)
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
+				// origDir に存在しない → AI が新規追加したファイル
+				return copyFile(path, destPath)
+			}
+			return fmt.Errorf("copyImplementedFiles: stat orig: %w", statErr)
+		}
+
+		// サイズで事前判定（巨大ファイルの全量読み込みを抑制）
+		workInfo, infoErr := d.Info()
+		if infoErr != nil {
+			return fmt.Errorf("copyImplementedFiles: info work: %w", infoErr)
+		}
+		if origInfo.Size() != workInfo.Size() {
+			// サイズ相違 → 変更あり
+			return copyFile(path, destPath)
+		}
+
+		// 内容の比較
+		differs, cmpErr := fileContentDiffers(origPath, path)
+		if cmpErr != nil {
+			return fmt.Errorf("copyImplementedFiles: compare: %w", cmpErr)
+		}
+		if differs {
+			return copyFile(path, destPath)
+		}
+
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// ── Phase 2: origDir を歩いて workDir に存在しないファイルを dst から削除 ──
+	return filepath.WalkDir(origDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		rel, err := filepath.Rel(origDir, path)
+		if err != nil {
+			return fmt.Errorf("copyImplementedFiles: rel orig: %w", err)
+		}
+
+		if isExcludedRel(rel) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if d.IsDir() {
+			return nil
+		}
+
+		// workDir に存在しない → AI が削除したファイル
+		workPath := filepath.Join(workDir, rel)
+		if _, statErr := os.Stat(workPath); os.IsNotExist(statErr) {
+			dstPath := filepath.Join(dst, rel)
+			if removeErr := os.Remove(dstPath); removeErr != nil && !os.IsNotExist(removeErr) { // #nosec G304
+				return fmt.Errorf("copyImplementedFiles: remove: %w", removeErr)
+			}
+		}
+
+		return nil
+	})
+}
+
+// buildPRBody はリポジトリのPRテンプレートを読み込み、Issue への紐付けキーワードを付与して
+// PR 本文を生成します。テンプレートが存在しない場合はデフォルトメッセージにフォールバックします。
+func buildPRBody(issueNumber int, dir string) string {
+	templatePaths := []string{
+		".github/pull_request_template.md",
+		".github/PULL_REQUEST_TEMPLATE.md",
+		"pull_request_template.md",
+	}
+
+	var body string
+	for _, relPath := range templatePaths {
+		data, err := os.ReadFile(filepath.Join(dir, relPath)) // #nosec G304
+		if err == nil {
+			body = string(data)
+			break
+		}
+	}
+
+	if body == "" {
+		body = "Cording Pilot による自動生成 PR です。"
+	}
+
+	if issueNumber > 0 {
+		if !strings.HasSuffix(body, "\n") {
+			body += "\n"
+		}
+		body += fmt.Sprintf("\n---\n\nCloses #%d\n", issueNumber)
+	}
+
+	return body
+}
+
 // copyDir は src ディレクトリの内容を dst ディレクトリへ再帰的にコピーします。
 // VCS 管理用ディレクトリ（.git と .worktrees）および開発環境依存ディレクトリ（.direnv）はスキップします。
 func copyDir(src, dst string) error {
@@ -187,19 +354,7 @@ func copyDir(src, dst string) error {
 			return fmt.Errorf("copyDir: rel path: %w", err)
 		}
 
-		if rel == ".git" || strings.HasPrefix(rel, ".git/") {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if rel == ".worktrees" || strings.HasPrefix(rel, ".worktrees/") {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if rel == ".direnv" || strings.HasPrefix(rel, ".direnv/") {
+		if isExcludedRel(rel) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
