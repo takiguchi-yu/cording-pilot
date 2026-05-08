@@ -115,12 +115,12 @@ func wrapOllamaAPIError(operation string, err error) error {
 
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
-		return fmt.Errorf("%s: Ollamaサーバーに接続できません。Ollamaが起動しているか確認してください: %w", operation, err)
+		return fmt.Errorf("%s: Ollamaサーバーに接続できません。'make ollama-serve' を実行しているか確認してください: %w", operation, err)
 	}
 
 	lower := strings.ToLower(err.Error())
 	if strings.Contains(lower, "connection refused") || strings.Contains(lower, "connect:") {
-		return fmt.Errorf("%s: Ollamaサーバーに接続できません。Ollamaが起動しているか確認してください: %w", operation, err)
+		return fmt.Errorf("%s: Ollamaサーバーに接続できません。'make ollama-serve' を実行しているか確認してください: %w", operation, err)
 	}
 
 	return fmt.Errorf("%s: %w", operation, err)

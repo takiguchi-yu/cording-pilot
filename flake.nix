@@ -16,6 +16,7 @@
         packages = with pkgs; [
           go_1_26
           golangci-lint
+          ollama
         ];
       };
     };
