@@ -104,12 +104,108 @@ func (c *OllamaClient) GenerateStructured(ctx context.Context, prompt string, ta
 	raw := resp.Choices[0].Message.Content
 	_ = c.log.Debug("llm.ollama.generateStructured.response", fmt.Sprintf("raw=%q", raw))
 
-	sanitized := sanitizeJSONResponse(raw)
-	if jsonErr := json.Unmarshal([]byte(sanitized), target); jsonErr != nil {
-		_ = c.log.Error("llm.ollama.generateStructured.parseError", fmt.Sprintf("error=%v raw=%q", jsonErr, raw))
-		return fmt.Errorf("%w: %w (raw: %s)", ErrJSONParse, jsonErr, raw)
+	if jsonErr := decodeStructuredJSON(raw, target); jsonErr != nil {
+		_ = c.log.Warn("llm.ollama.generateStructured.repair.start", fmt.Sprintf("initial_error=%v", jsonErr))
+		repairedRaw, repairErr := c.repairStructuredJSON(ctx, raw, string(schemaBytes))
+		if repairErr != nil {
+			_ = c.log.Error("llm.ollama.generateStructured.parseError", fmt.Sprintf("error=%v raw=%q", jsonErr, raw))
+			return fmt.Errorf("%w: %w (raw: %s)", ErrJSONParse, jsonErr, raw)
+		}
+		if repairDecodeErr := decodeStructuredJSON(repairedRaw, target); repairDecodeErr != nil {
+			_ = c.log.Error("llm.ollama.generateStructured.parseError", fmt.Sprintf("error=%v raw=%q repaired_raw=%q", repairDecodeErr, raw, repairedRaw))
+			return fmt.Errorf("%w: %w (raw: %s)", ErrJSONParse, repairDecodeErr, repairedRaw)
+		}
+		_ = c.log.Info("llm.ollama.generateStructured.repair.success", "壊れた JSON を修復してデコードしました")
 	}
 	return nil
+}
+
+func (c *OllamaClient) repairStructuredJSON(ctx context.Context, raw string, schema string) (string, error) {
+	repairSource := truncateForOllamaContext(raw, maxOllamaPromptChars)
+	repairPrompt := "以下は壊れた JSON です。JSON を修復し、必ず JSON のみを返してください。説明文や Markdown は禁止です。\n\n" +
+		"## 必須スキーマ\n" + schema + "\n\n" +
+		"## 壊れた JSON\n" + repairSource
+
+	resp, err := c.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+		Model: c.model,
+		Messages: []openai.ChatCompletionMessage{
+			{Role: openai.ChatMessageRoleSystem, Content: "あなたは JSON 修復エンジンです。壊れた JSON をスキーマに沿って修復し、有効な JSON のみを返します。"},
+			{Role: openai.ChatMessageRoleUser, Content: repairPrompt},
+		},
+		ResponseFormat: &openai.ChatCompletionResponseFormat{
+			Type: openai.ChatCompletionResponseFormatTypeJSONObject,
+		},
+	})
+	if err != nil {
+		return "", wrapOllamaAPIError("llm: ollama repair structured", err)
+	}
+
+	return resp.Choices[0].Message.Content, nil
+}
+
+func decodeStructuredJSON(raw string, target interface{}) error {
+	sanitized := sanitizeJSONResponse(raw)
+	if err := json.Unmarshal([]byte(sanitized), target); err == nil {
+		return nil
+	}
+
+	var nestedJSON string
+	if err := json.Unmarshal([]byte(sanitized), &nestedJSON); err == nil {
+		nestedSanitized := sanitizeJSONResponse(nestedJSON)
+		if nestedErr := json.Unmarshal([]byte(nestedSanitized), target); nestedErr == nil {
+			return nil
+		}
+	}
+
+	if obj, ok := extractFirstJSONObject(sanitized); ok {
+		if err := json.Unmarshal([]byte(obj), target); err == nil {
+			return nil
+		}
+	}
+
+	return json.Unmarshal([]byte(sanitized), target)
+}
+
+func extractFirstJSONObject(s string) (string, bool) {
+	start := strings.IndexByte(s, '{')
+	if start == -1 {
+		return "", false
+	}
+
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		ch := s[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return s[start : i+1], true
+			}
+		}
+	}
+
+	return "", false
 }
 
 func wrapOllamaAPIError(operation string, err error) error {

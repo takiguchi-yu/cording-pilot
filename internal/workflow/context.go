@@ -26,4 +26,6 @@ type Context struct {
 	IssueNumber int
 	// BranchName は生成した作業ブランチ名です。Complete フェーズで設定されます。
 	BranchName string
+	// DeterministicFallbackUsed は Implement フェーズで deterministic fallback を適用したかを示します。
+	DeterministicFallbackUsed bool
 }

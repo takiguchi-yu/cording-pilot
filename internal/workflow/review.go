@@ -35,6 +35,14 @@ func (s *ReviewState) Execute(ctx context.Context, wfCtx *Context) (State, error
 		return nil, err
 	}
 
+	if wfCtx.DeterministicFallbackUsed {
+		wfCtx.ReviewFeedback = "Approve: deterministic fallback を適用し、品質パイプラインを通過済みのためレビューをスキップしました。"
+		if err := s.Logger.Warn("review.skipped", "deterministic fallback 適用済みのため Reviewer 呼び出しをスキップします"); err != nil {
+			return nil, err
+		}
+		return s.OnApprove, nil
+	}
+
 	requirementForPrompt := compactPromptText(wfCtx.Requirement, maxReviewRequirementChars)
 	planForPrompt := compactPromptText(wfCtx.PlanText, maxReviewPlanChars)
 	testOutputForPrompt := compactPromptText(wfCtx.LastTestOutput, maxReviewTestOutputChars)

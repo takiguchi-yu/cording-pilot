@@ -159,6 +159,28 @@ func TestJSONSchemaFromType_ネストした構造体を再帰的に解決する(
 	assertSchemaType(t, childSchema, "object")
 }
 
+func TestJSONSchemaFromType_omitempty付きフィールドはrequiredに含めない(t *testing.T) {
+	t.Parallel()
+	type patch struct {
+		Path    string `json:"path"`
+		Content string `json:"content,omitempty"`
+		Search  string `json:"search,omitempty"`
+		Replace string `json:"replace,omitempty"`
+	}
+
+	schema := llm.ExportJSONSchemaFromType(reflect.TypeOf(patch{}))
+	req, ok := schema["required"].([]string)
+	if !ok {
+		t.Fatal("required フィールドが存在しません")
+	}
+	if !containsString(req, "path") {
+		t.Errorf("required=%v; want to contain 'path'", req)
+	}
+	if containsString(req, "content") || containsString(req, "search") || containsString(req, "replace") {
+		t.Errorf("required=%v; omitempty フィールドは含まれるべきではありません", req)
+	}
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func assertSchemaType(t *testing.T, schema map[string]interface{}, wantType string) {

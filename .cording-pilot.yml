@@ -77,7 +77,7 @@ llm:
     # [任意] 使用するプロバイダー: copilot / ollama。未指定時: default.provider
     provider: "ollama"
     # [任意] Coder で使用するモデル。未指定時: default.model
-    model: "gemma3:4b"
+    model: "qwen2.5-coder:3b"
     # [任意] API ベース URL。未指定時: default.base_url
     base_url: "http://localhost:11434/v1"
   # [任意] Reviewer エージェント固有のプロバイダー設定。省略時は default を使用。
@@ -89,7 +89,7 @@ llm:
     # [任意] API ベース URL。未指定時: default.base_url
     base_url: "http://localhost:11434/v1"
   # [任意] 自己修復フェーズ用モデル。未指定時: default.model を使用。
-  auto_fix_model: "gemma3:4b"
+  auto_fix_model: "qwen2.5-coder:3b"
   # [任意] リトライ設定。
   retry:
     # [任意] 1 以上。未指定時: 3
