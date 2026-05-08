@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -86,7 +88,20 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 	}
 	wfCtx.WorkDir = workDir
 
-	// Step 1: generate test code.
+	// Step 0: タスクをサブタスクに分割する（Decomposition）。
+	subtasks, err := s.Coder.DecomposeTask(ctx, filteredPlanText)
+	if err != nil {
+		return nil, fmt.Errorf("implement: decompose task: %w", err)
+	}
+	if len(subtasks) == 0 {
+		subtasks = []string{filteredPlanText}
+	}
+	if err = s.Logger.Info("implement.decompose",
+		fmt.Sprintf("タスクを %d 個のサブタスクに分割しました", len(subtasks))); err != nil {
+		return nil, err
+	}
+
+	// Step 1: テストコードを生成する（全体プランを対象に1回のみ）。
 	testResult, err := s.generateTestCode(ctx, wfCtx, filteredPlanText)
 	if err != nil {
 		return nil, err
@@ -100,10 +115,16 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 		}
 	}
 
-	// Step 2a: auto_fix before initial pipeline run
+	// Step 2: 動的コンテキストを収集してハルシネーション抑制に役立てる。
+	codeContext, contextFiles := gatherContext(workDir, filteredPlanText)
+	if err = s.Logger.Info("implement.context",
+		fmt.Sprintf("コードコンテキスト収集完了: %d ファイル読み込み: %v", len(contextFiles), contextFiles)); err != nil {
+		return nil, err
+	}
+
+	// auto_fix → 初期パイプライン実行（Red 想定）
 	s.runAutoFix(ctx, workDir, cfg.AutoFix, s.Exec)
 
-	// Step 2b: initial pipeline run (expected Red — no implementation yet).
 	initialOut, _, initialErr := s.runPipeline(ctx, workDir, cfg.Pipeline)
 	if initialErr != nil {
 		return nil, fmt.Errorf("implement: initial pipeline run: %w", initialErr)
@@ -113,74 +134,91 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 		return nil, err
 	}
 
-	// Step 3: Fix Loop.
-	implCache := make(map[string]agent.CodeGenerationResult)
-	for wfCtx.TryCount < maxTryCount {
-		wfCtx.TryCount++
-
-		if err = s.Logger.Info(
-			"implement.fix_loop",
-			fmt.Sprintf("Fix Loop 試行 %d/%d", wfCtx.TryCount, maxTryCount),
-		); err != nil {
+	// Step 3: サブタスクごとに Fix Loop（Generate -> AutoFix -> Pipeline）を実行する。
+	for subtaskIdx, subtask := range subtasks {
+		if err = s.Logger.Info("implement.subtask_start",
+			fmt.Sprintf("サブタスク %d/%d 開始: %s", subtaskIdx+1, len(subtasks), subtask)); err != nil {
 			return nil, err
 		}
 
-		cacheKey := filteredPlanText + "\n\n" + wfCtx.LastTestOutput
-		implResult, fromCache, genErr := s.generateImplCodeWithCache(ctx, wfCtx, filteredPlanText, cacheKey, implCache)
-		if genErr != nil {
-			// JSON パースエラーの場合はエラー内容を LLM にフィードバックして再試行する。
-			if errors.Is(genErr, llm.ErrJSONParse) {
-				wfCtx.LastTestOutput = genErr.Error()
-				if logErr := s.Logger.Info("implement.json_parse_error",
-					fmt.Sprintf("JSON 解析エラーを Fix Loop にフィードバックします: %v", genErr)); logErr != nil {
-					return nil, logErr
+		implCache := make(map[string]agent.CodeGenerationResult)
+		subtaskDone := false
+		for localTry := 0; localTry < maxTryCount; localTry++ {
+			wfCtx.TryCount++
+
+			if err = s.Logger.Info("implement.fix_loop",
+				fmt.Sprintf("サブタスク %d/%d Fix Loop 試行 %d/%d",
+					subtaskIdx+1, len(subtasks), localTry+1, maxTryCount)); err != nil {
+				return nil, err
+			}
+
+			cacheKey := filteredPlanText + "\n\n" + subtask + "\n\n" + wfCtx.LastTestOutput
+			implResult, fromCache, genErr := s.generateImplCodeWithCache(
+				ctx, wfCtx, filteredPlanText, subtask, codeContext, cacheKey, implCache)
+			if genErr != nil {
+				// JSON パースエラーの場合はエラー内容を LLM にフィードバックして再試行する。
+				if errors.Is(genErr, llm.ErrJSONParse) {
+					wfCtx.LastTestOutput = genErr.Error()
+					if logErr := s.Logger.Info("implement.json_parse_error",
+						fmt.Sprintf("JSON 解析エラーを Fix Loop にフィードバックします: %v", genErr)); logErr != nil {
+						return nil, logErr
+					}
+					continue
 				}
+				return nil, genErr
+			}
+			if len(implResult.Files) == 0 {
+				wfCtx.LastTestOutput = "実装コードのファイルリストが空です"
 				continue
 			}
-			return nil, genErr
-		}
-		if len(implResult.Files) == 0 {
-			wfCtx.LastTestOutput = "実装コードのファイルリストが空です"
-			continue
-		}
-		if fromCache {
-			if err = s.Logger.Info("implement.cache_hit", "同一条件のため実装生成結果をキャッシュから再利用します"); err != nil {
+			if fromCache {
+				if err = s.Logger.Info("implement.cache_hit", "同一条件のため実装生成結果をキャッシュから再利用します"); err != nil {
+					return nil, err
+				}
+			}
+
+			for _, f := range implResult.Files {
+				if writeErr := safeWriteFile(workDir, f.Path, []byte(f.Content)); writeErr != nil {
+					return nil, fmt.Errorf("implement: write impl file: %w", writeErr)
+				}
+			}
+
+			s.runAutoFix(ctx, workDir, cfg.AutoFix, s.Exec)
+
+			out, success, pipeErr := s.runPipeline(ctx, workDir, cfg.Pipeline)
+			if pipeErr != nil {
+				return nil, fmt.Errorf("implement: pipeline run (subtask %d, iter %d): %w",
+					subtaskIdx+1, wfCtx.TryCount, pipeErr)
+			}
+			// Fix Loop の出力はスマートに切り詰めてトークン消費を抑制する。
+			wfCtx.LastTestOutput = TruncateLog(out, 50)
+
+			if err = s.Logger.Info("implement.pipeline_result",
+				fmt.Sprintf("サブタスク %d/%d 試行 %d: success=%v\n%s",
+					subtaskIdx+1, len(subtasks), localTry+1, success, out)); err != nil {
 				return nil, err
 			}
-		}
 
-		for _, f := range implResult.Files {
-			if writeErr := safeWriteFile(workDir, f.Path, []byte(f.Content)); writeErr != nil {
-				return nil, fmt.Errorf("implement: write impl file: %w", writeErr)
+			if success {
+				if err = s.Logger.Info("implement.subtask_done",
+					fmt.Sprintf("サブタスク %d/%d が完了しました (Green)", subtaskIdx+1, len(subtasks))); err != nil {
+					return nil, err
+				}
+				subtaskDone = true
+				break
 			}
 		}
 
-		// Auto-fix before running pipeline
-		s.runAutoFix(ctx, workDir, cfg.AutoFix, s.Exec)
-
-		out, success, pipeErr := s.runPipeline(ctx, workDir, cfg.Pipeline)
-		if pipeErr != nil {
-			return nil, fmt.Errorf("implement: pipeline run (iter %d): %w", wfCtx.TryCount, pipeErr)
-		}
-		wfCtx.LastTestOutput = out
-
-		if err = s.Logger.Info(
-			"implement.pipeline_result",
-			fmt.Sprintf("試行 %d: success=%v\n%s", wfCtx.TryCount, success, out),
-		); err != nil {
-			return nil, err
-		}
-
-		if success {
-			if err = s.Logger.Info("implement.done", "すべてのパイプラインステップが通過しました (Green)"); err != nil {
-				return nil, err
-			}
-			return s.Next, nil
+		if !subtaskDone {
+			return nil, fmt.Errorf("implement: サブタスク %d/%d の Fix Loop の上限 (%d 回) に達しました。最後のパイプライン出力:\n%s",
+				subtaskIdx+1, len(subtasks), maxTryCount, wfCtx.LastTestOutput)
 		}
 	}
 
-	return nil, fmt.Errorf("implement: Fix Loop の上限 (%d 回) に達しました。最後のパイプライン出力:\n%s",
-		maxTryCount, wfCtx.LastTestOutput)
+	if err = s.Logger.Info("implement.done", "すべてのパイプラインステップが通過しました (Green)"); err != nil {
+		return nil, err
+	}
+	return s.Next, nil
 }
 
 // safeWriteFile は workDir 配下の relPath にコンテンツを書き込みます。
@@ -310,7 +348,7 @@ func (s *ImplementState) generateTestCode(ctx context.Context, wfCtx *Context, p
 	return result, nil
 }
 
-func (s *ImplementState) generateImplCode(ctx context.Context, wfCtx *Context, planText string) (agent.CodeGenerationResult, error) {
+func (s *ImplementState) generateImplCode(ctx context.Context, wfCtx *Context, planText string, subtask string, codeContext string) (agent.CodeGenerationResult, error) {
 	cfg := wfCtx.Config
 	if cfg == nil {
 		cfg = config.DefaultGoConfig()
@@ -318,10 +356,12 @@ func (s *ImplementState) generateImplCode(ctx context.Context, wfCtx *Context, p
 	planForPrompt := compactPromptText(planText, maxPlanPromptChars)
 	failureOutputForPrompt := compactPromptText(wfCtx.LastTestOutput, maxFailureOutputChars)
 	prompt := fmt.Sprintf(
-		"以下の実装計画とパイプライン失敗の出力を元に、[%s] のプロダクトコードを生成してください。ファイルの拡張子やディレクトリ構造は対象言語のベストプラクティスおよび既存のリポジトリ構成に従うこと。\n\n## 実装計画\n%s\n\n## パイプライン出力\n%s",
+		"以下の実装計画とパイプライン失敗の出力を元に、[%s] のプロダクトコードを生成してください。ファイルの拡張子やディレクトリ構造は対象言語のベストプラクティスおよび既存のリポジトリ構成に従うこと。\n\n## 実装計画\n%s\n\n## 現在のサブタスク（優先的に実装すること）\n%s\n\n## パイプライン出力\n%s\n\n## 既存の実装コンテキスト\n%s",
 		cfg.Project.Language,
 		planForPrompt,
+		subtask,
 		failureOutputForPrompt,
+		codeContext,
 	)
 	result, err := s.Coder.GenerateCode(ctx, prompt)
 	if err != nil {
@@ -334,6 +374,8 @@ func (s *ImplementState) generateImplCodeWithCache(
 	ctx context.Context,
 	wfCtx *Context,
 	planText string,
+	subtask string,
+	codeContext string,
 	cacheKey string,
 	cache map[string]agent.CodeGenerationResult,
 ) (agent.CodeGenerationResult, bool, error) {
@@ -341,7 +383,7 @@ func (s *ImplementState) generateImplCodeWithCache(
 		return result, true, nil
 	}
 
-	result, err := s.generateImplCode(ctx, wfCtx, planText)
+	result, err := s.generateImplCode(ctx, wfCtx, planText, subtask, codeContext)
 	if err != nil {
 		return agent.CodeGenerationResult{}, false, err
 	}
@@ -373,4 +415,78 @@ func compactPromptText(text string, maxChars int) string {
 	}
 
 	return fmt.Sprintf("%s\n\n... [truncated %d chars] ...\n\n%s", head, removed, tail)
+}
+
+// goFilePathRe はプラン文字列から Go ソースファイルパスを抽出するための正規表現です。
+var goFilePathRe = regexp.MustCompile(`[a-zA-Z0-9_./-]+\.go`)
+
+// gatherContext は workDir のディレクトリ構造（2階層まで）と、
+// plan から抽出した関連 Go ファイルの内容をまとめた文字列を返します。
+// 第2戻り値は実際に読み込んだファイルパスのリストです。
+func gatherContext(workDir string, plan string) (string, []string) {
+	var sb strings.Builder
+
+	// ディレクトリツリー（2階層目まで）を収集する。
+	sb.WriteString("## ディレクトリ構造\n```\n")
+	_ = filepath.WalkDir(workDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, relErr := filepath.Rel(workDir, path)
+		if relErr != nil || rel == "." {
+			return nil
+		}
+		base := filepath.Base(path)
+		// 隠しディレクトリ／ファイルはスキップする。
+		if strings.HasPrefix(base, ".") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		depth := strings.Count(rel, string(filepath.Separator))
+		if depth >= 2 {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		indent := strings.Repeat("  ", depth)
+		if d.IsDir() {
+			fmt.Fprintf(&sb, "%s%s/\n", indent, base)
+		} else {
+			fmt.Fprintf(&sb, "%s%s\n", indent, base)
+		}
+		return nil
+	})
+	sb.WriteString("```\n\n")
+
+	// plan からファイルパス文字列を抽出し、workDir 内に実在するものを読み込む。
+	matches := goFilePathRe.FindAllString(plan, -1)
+	seen := make(map[string]bool)
+	var readFiles []string
+	for _, m := range matches {
+		if seen[m] {
+			continue
+		}
+		seen[m] = true
+		clean := filepath.Clean(m)
+		// パストラバーサル防止。
+		if strings.HasPrefix(clean, "..") {
+			continue
+		}
+		fullPath := filepath.Join(workDir, clean)
+		rel, relErr := filepath.Rel(workDir, fullPath)
+		if relErr != nil || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		content, readErr := os.ReadFile(fullPath)
+		if readErr != nil {
+			continue
+		}
+		readFiles = append(readFiles, m)
+		fmt.Fprintf(&sb, "## %s\n```go\n%s\n```\n\n", m, string(content))
+	}
+
+	return sb.String(), readFiles
 }

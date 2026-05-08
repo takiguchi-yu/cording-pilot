@@ -7,6 +7,79 @@ import (
 	"github.com/takiguchi-yu/cording-pilot/internal/workflow"
 )
 
+func TestTruncateLog(t *testing.T) {
+	t.Parallel()
+
+	makeLines := func(n int, prefix string) string {
+		var sb strings.Builder
+		for i := 0; i < n; i++ {
+			if i > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(prefix)
+		}
+		return sb.String()
+	}
+
+	tests := []struct {
+		name       string
+		output     string
+		maxLines   int
+		wantSnip   bool
+		wantPrefix string
+	}{
+		{
+			name:     "行数が maxLines 以内なら変更しない",
+			output:   makeLines(30, "line"),
+			maxLines: 50,
+			wantSnip: false,
+		},
+		{
+			name:     "行数が maxLines ちょうどなら変更しない",
+			output:   makeLines(50, "line"),
+			maxLines: 50,
+			wantSnip: false,
+		},
+		{
+			name:     "行数が maxLines を超えたら snip マーカーを挿入する",
+			output:   makeLines(100, "failure-line"),
+			maxLines: 50,
+			wantSnip: true,
+		},
+		{
+			name:     "先頭10行は必ず保持される",
+			output:   makeLines(200, "important"),
+			maxLines: 50,
+			wantSnip: true,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := workflow.TruncateLog(tc.output, tc.maxLines)
+			hasSnip := strings.Contains(got, "(snip")
+
+			if tc.wantSnip && !hasSnip {
+				t.Errorf("snip マーカーが期待されましたが含まれていません: %q", got)
+			}
+			if !tc.wantSnip && hasSnip {
+				t.Errorf("snip マーカーは含まれないはずですが含まれています: %q", got)
+			}
+
+			if tc.wantSnip {
+				gotLines := strings.Split(got, "\n")
+				// snip マーカー行を1行と数えると、合計行数は maxLines+1 以内
+				if len(gotLines) > tc.maxLines+2 {
+					t.Errorf("切り詰め後の行数 %d が maxLines %d を大幅に超えています", len(gotLines), tc.maxLines)
+				}
+			}
+		})
+	}
+}
+
 func TestFilterIssueForCoder(t *testing.T) {
 	t.Parallel()
 

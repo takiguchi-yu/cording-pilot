@@ -35,19 +35,39 @@ sequenceDiagram
         Note over Conductor, Reviewer: ① 計画フェーズ (Plan)
         Conductor->>Planner: Issueを元に具体的な実装計画と影響範囲を作成
         Planner-->>Conductor: 実装計画を出力
+        Conductor->>Conductor: 実装計画の不要セクションを削ぎ落とし (プロンプト軽量化)
     end
 
     %% 実装フェーズ (透明度の高い緑)
     rect rgba(50, 200, 100, 0.15)
         Note over Conductor, Reviewer: ② 実装フェーズ (Implement)
-        Conductor->>Coder: 計画に基づく実装を指示
-        loop Fix Loop (上限回数あり)
-            Coder->>Executor: コード一式(テスト+プロダクト)を生成(構造化出力)
-            Executor->>Executor: Auto-Fix実行 (例: tidy, fmt, fix)
-            Executor->>Executor: 品質パイプライン実行 (build, lint, test)
-            Executor-->>Coder: 結果 (Green: 通過, Red: エラー)
+        Conductor->>Coder: 軽量化された実装計画からテストコードを生成 (TDD)
+        Coder->>Executor: テストコード一式を生成(構造化出力)
+        Executor-->>Conductor: テストコード生成完了
+
+        Conductor->>Coder: 軽量化された実装計画からサブタスク分割を指示 (Decompose)
+        Coder-->>Conductor: サブタスクリストを出力
+
+        Conductor->>Conductor: 初期パイプライン実行 (Red 想定、実装がないため失敗するのが正常)
+        Executor->>Executor: 品質パイプライン実行 (build, lint, test)
+        Executor-->>Conductor: 結果 (Red: エラー出力が得られる)
+
+        Conductor->>Conductor: 動的コンテキスト収集 (RAG: ツリー構造・関連ファイル読込)
+
+        loop 各サブタスクを順に実行
+            loop Fix Loop (上限回数あり)
+                Conductor->>Coder: サブタスクとコンテキストを渡し、実装を指示
+                Coder->>Executor: プロダクトコードを生成(構造化出力)
+                Executor->>Executor: Auto-Fix実行 (例: tidy, fmt, fix)
+                Executor->>Executor: 品質パイプライン実行 (build, lint, test)
+                Executor-->>Conductor: 結果 (Green: 通過, Red: エラー)
+
+                opt エラー(Red)の場合
+                    Conductor->>Conductor: エラーログのスマート切り詰め (Token節約)
+                end
+            end
         end
-        Coder-->>Conductor: 実装完了
+        Conductor-->>Conductor: 全サブタスク完了
     end
 
     %% レビューフェーズ (透明度の高い赤)
@@ -56,7 +76,7 @@ sequenceDiagram
         Conductor->>Reviewer: 差分と要件の突合・レビューを指示
         Reviewer-->>Conductor: 結果 (Approve / Request Changes)
         opt 問題がある場合 (NG)
-            Conductor->>Coder: 修正点を伝達し、実装フェーズへ差し戻し
+            Conductor->>Conductor: 修正点をタスク化し、実装フェーズ(サブタスク)へ差し戻し
         end
     end
 

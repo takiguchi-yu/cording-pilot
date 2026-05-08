@@ -1,9 +1,31 @@
 package workflow
 
 import (
+	"fmt"
 	"strings"
 	"unicode/utf8"
 )
+
+// TruncateLog は長大なログ出力を行数でスマートに切り詰めてトークン消費を抑制します。
+// 総行数が maxLines を超える場合は、先頭10行と末尾(maxLines-10)行を残し、
+// 中間に省略メッセージを挿入して返します。maxLines 以内の場合はそのまま返します。
+func TruncateLog(output string, maxLines int) string {
+	lines := strings.Split(output, "\n")
+	if len(lines) <= maxLines {
+		return output
+	}
+	headCount := 10
+	if headCount >= maxLines {
+		headCount = maxLines - 1
+	}
+	tailCount := maxLines - headCount
+	snipped := len(lines) - headCount - tailCount
+	head := lines[:headCount]
+	tail := lines[len(lines)-tailCount:]
+	return strings.Join(head, "\n") +
+		fmt.Sprintf("\n... (snip %d lines) ...\n", snipped) +
+		strings.Join(tail, "\n")
+}
 
 const (
 	issueFilterMinRatio = 0.05

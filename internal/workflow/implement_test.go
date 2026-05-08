@@ -439,9 +439,19 @@ func TestImplementState_Execute_大きな失敗出力は切り詰めて実装生
 
 // funcCoderAgent は関数をバックエンドとする agent.CoderAgent スタブです。
 type funcCoderAgent struct {
-	fn func(ctx context.Context, task string) (agent.CodeGenerationResult, error)
+	fn          func(ctx context.Context, task string) (agent.CodeGenerationResult, error)
+	decomposeFn func(ctx context.Context, plan string) ([]string, error)
 }
 
 func (a *funcCoderAgent) GenerateCode(ctx context.Context, task string) (agent.CodeGenerationResult, error) {
 	return a.fn(ctx, task)
+}
+
+// DecomposeTask は decomposeFn が設定されていればそれを呼び出し、
+// 未設定の場合は plan を単一サブタスクとして返します（後方互換）。
+func (a *funcCoderAgent) DecomposeTask(_ context.Context, plan string) ([]string, error) {
+	if a.decomposeFn != nil {
+		return a.decomposeFn(context.Background(), plan)
+	}
+	return []string{plan}, nil
 }
