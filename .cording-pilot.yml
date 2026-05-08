@@ -6,7 +6,7 @@
 # - [任意] 省略可能（未指定時はデフォルト補完）
 #
 # 最低限動かすだけなら `version` のみでも起動可能です。
-# ただし実運用では、少なくとも `llm.provider` と `llm.model` は明示推奨です。
+# ただし実運用では、少なくとも `llm.default.provider` と `llm.default.model` は明示推奨です。
 
 # [必須] スキーマバージョン。現在は "1.0" 固定。
 version: "1.0"
@@ -41,28 +41,54 @@ agents:
     あなたは厳格なコードレビュアーです。
     差分と要件を突き合わせてレビューし、結果を "Approve" または "Request Changes" のいずれかで冒頭に明示してください。
     問題点がある場合は具体的な修正点を列挙してください。
+  # [任意] Fix Loop 迷走時に Coder へ方針転換を助言する監督エージェント。
+  # 省略時は組み込みデフォルトを使用。
+  supervisor: |-
+    あなたは実装フェーズの監督者です。
+    失敗ログと差分を分析し、最短で Green に到達するための実行可能な修正方針を箇条書きで提示してください。
+    冗長な説明は避け、変更優先順位を明示してください。
 
 # [任意] LLM 設定。
+# エージェントごとに異なるプロバイダーとモデルを設定できるハイブリッド構成をサポートします。
 # 補足:
 # - provider=copilot の場合、実行時に GITHUB_TOKEN が必要です。
 # - provider=ollama の場合、通常 base_url を指定します。
+# - エージェント固有設定を省略した場合は default の設定が使用されます。
 llm:
-  # [任意] 使用するプロバイダー: copilot / ollama。未指定時: "copilot"
-  provider: "ollama"
-  # [任意] 既定モデル。未指定時: "gpt-4.1"（Ollama利用時の推奨: qwen3-coder-next:q4_K_M）
-  model: "qwen3-coder-next:q4_K_M"
-  # [任意] API ベース URL（例: Ollama）。未指定可。
-  base_url: "http://localhost:11434/v1"
-  # [任意] 自己修復フェーズ用モデル。未指定時: model を使用。
-  auto_fix_model: "qwen3-coder-next:q4_K_M"
-  # [任意] Interactive の確認質問で使うモデル。未指定時: model を使用。
-  planner_clarification_model: "qwen3-coder-next:q4_K_M"
-  # [任意] Plan/CompileIssue で使うモデル。未指定時: model を使用。
-  planner_plan_model: "qwen3-coder-next:q4_K_M"
-  # [任意] Coder で使うモデル。未指定時: model を使用。
-  coder_model: "qwen3-coder-next:q4_K_M"
-  # [任意] Reviewer で使うモデル。未指定時: model を使用。
-  reviewer_model: "qwen3-coder-next:q4_K_M"
+  # [必須] 全エージェントで使用するデフォルトのプロバイダー設定。
+  default:
+    # [任意] 使用するプロバイダー: copilot / ollama。未指定時: "copilot"
+    provider: "ollama"
+    # [任意] 既定モデル。未指定時: "gpt-4.1"
+    model: "gemma3:4b"
+    # [任意] API ベース URL（Ollama 利用時など）。未指定可。
+    base_url: "http://localhost:11434/v1"
+  # [任意] Planner エージェント固有のプロバイダー設定。省略時は default を使用。
+  planner:
+    # [任意] 使用するプロバイダー: copilot / ollama。未指定時: default.provider
+    provider: "ollama"
+    # [任意] Planner で使用するモデル。未指定時: default.model
+    model: "gemma3:4b"
+    # [任意] API ベース URL。未指定時: default.base_url
+    base_url: "http://localhost:11434/v1"
+  # [任意] Coder エージェント固有のプロバイダー設定。省略時は default を使用。
+  coder:
+    # [任意] 使用するプロバイダー: copilot / ollama。未指定時: default.provider
+    provider: "ollama"
+    # [任意] Coder で使用するモデル。未指定時: default.model
+    model: "gemma3:4b"
+    # [任意] API ベース URL。未指定時: default.base_url
+    base_url: "http://localhost:11434/v1"
+  # [任意] Reviewer エージェント固有のプロバイダー設定。省略時は default を使用。
+  reviewer:
+    # [任意] 使用するプロバイダー: copilot / ollama。未指定時: default.provider
+    provider: "ollama"
+    # [任意] Reviewer で使用するモデル。未指定時: default.model
+    model: "phi4-mini-reasoning"
+    # [任意] API ベース URL。未指定時: default.base_url
+    base_url: "http://localhost:11434/v1"
+  # [任意] 自己修復フェーズ用モデル。未指定時: default.model を使用。
+  auto_fix_model: "gemma3:4b"
   # [任意] リトライ設定。
   retry:
     # [任意] 1 以上。未指定時: 3

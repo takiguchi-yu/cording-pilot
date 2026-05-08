@@ -2,8 +2,35 @@ package llm
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"strings"
+
+	"github.com/takiguchi-yu/cording-pilot/internal/config"
+	"github.com/takiguchi-yu/cording-pilot/pkg/logger"
 )
+
+// NewClient は LLMProviderConfig から適切な LLM クライアントを生成します。
+// provider に応じて CopilotClient または OllamaClient を返します。
+// CopilotOptions は Copilot クライアントのリトライ・レートリミット設定に使用されます。
+func NewClient(providerCfg config.LLMProviderConfig, log *logger.Logger, opts CopilotOptions) (Client, error) {
+	switch providerCfg.Provider {
+	case "copilot":
+		token := os.Getenv("GITHUB_TOKEN")
+		if token == "" {
+			return nil, fmt.Errorf("provider %q には GITHUB_TOKEN 環境変数が必要です", providerCfg.Provider)
+		}
+		return NewCopilotClientWithOptions(providerCfg.Model, token, log, opts)
+	case "ollama":
+		baseURL := strings.TrimSpace(providerCfg.BaseURL)
+		if baseURL == "" {
+			baseURL = DefaultOllamaBaseURL
+		}
+		return NewOllamaClient(providerCfg.Model, baseURL, log)
+	default:
+		return nil, fmt.Errorf("未対応の LLM プロバイダーです: %q (対応プロバイダー: copilot, ollama)", providerCfg.Provider)
+	}
+}
 
 // RoleClients はフェーズ/役割ごとに使用する LLM クライアントを保持します。
 type RoleClients struct {

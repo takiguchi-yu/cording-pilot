@@ -89,7 +89,7 @@ cording-pilot --nix "実装要件"
 設定ファイルは厳格に検証されます。主な制約:
 
 - `version` は `"1.0"`
-- `llm.provider` は `copilot` または `ollama`
+- `llm.default.provider` は `copilot` または `ollama`
 - `environment.type` は `local` / `docker` / `nix`（`docker` の場合は `environment.image` 必須）
 - YAML の未知フィールドはエラー（`KnownFields(true)`）
 - 複数 YAML ドキュメントはサポート外
@@ -99,11 +99,30 @@ cording-pilot --nix "実装要件"
 ```yaml
 version: "1.0"
 llm:
-    provider: "copilot"
-    model: "gpt-4.1"
+    default:
+        provider: "copilot"
+        model: "gpt-4.1"
 environment:
     type: "local"
 ```
+
+### エージェント別 LLM ハイブリッド構成
+
+`llm.default` にデフォルト設定を書き、`llm.planner` / `llm.coder` / `llm.reviewer` でエージェントごとに別のプロバイダーとモデルを指定できます。
+省略したエージェントは `llm.default` の設定にフォールバックします。
+
+```yaml
+llm:
+    default:
+        provider: copilot
+        model: gpt-4o-mini
+    coder:
+        provider: ollama
+        model: qwen2.5-coder:3b
+        base_url: http://localhost:11434/v1
+```
+
+このように書くことで「実装フェーズ（Coder）だけはローカルの軽量モデルを使って爆速・無料で回す」という運用が可能になります。Planner と Reviewer は `llm.default` の Copilot/GPT が担当し、高品質な要件定義とコードレビューを維持しながら、Fix Loop のコスト・速度を最適化できます。
 
 ### プロジェクト固有の知識（Knowledge）の注入
 

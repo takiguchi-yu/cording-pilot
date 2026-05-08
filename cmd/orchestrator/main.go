@@ -224,92 +224,47 @@ func run(requirement string, issueNumber int, issueURLOwner, issueURLRepo string
 	return runner.Run(runCtx, interactiveState, wfCtx)
 }
 
-// newLLMClient は cfg.LLM.Provider に基づいて適切な llm.Client を生成します。
-// 必要な環境変数が未設定の場合は起動時に Fail-fast します。
+// newLLMClient は cfg.LLM の設定に基づいてエージェント別の LLM クライアントを生成し、
+// RoutingClient としてラップして返します。
+// エージェントごとに異なるプロバイダーとモデルを使用するハイブリッド構成をサポートします。
 func newLLMClient(cfg *config.Config, log *logger.Logger) (llm.Client, error) {
 	retryPolicy := retry.Policy{
 		MaxAttempts:  cfg.LLM.Retry.Attempts,
 		InitialDelay: time.Duration(cfg.LLM.Retry.InitialDelayMS) * time.Millisecond,
 		Multiplier:   cfg.LLM.Retry.Multiplier,
 	}
-	options := llm.CopilotOptions{
+	opts := llm.CopilotOptions{
 		RetryPolicy:      retryPolicy,
 		RateLimitMode:    cfg.LLM.RateLimit.Mode,
 		MaxRateLimitWait: time.Duration(cfg.LLM.RateLimit.MaxWaitSeconds) * time.Second,
 	}
 
-	switch cfg.LLM.Provider {
-	case "copilot":
-		token := os.Getenv("GITHUB_TOKEN")
-		if token == "" {
-			return nil, fmt.Errorf("provider %q には GITHUB_TOKEN 環境変数が必要です", cfg.LLM.Provider)
-		}
-
-		defaultClient, err := llm.NewCopilotClientWithOptions(cfg.LLM.Model, token, log, options)
-		if err != nil {
-			return nil, err
-		}
-
-		plannerClarificationClient, err := llm.NewCopilotClientWithOptions(cfg.LLM.PlannerClarificationModel, token, log, options)
-		if err != nil {
-			return nil, err
-		}
-		plannerPlanClient, err := llm.NewCopilotClientWithOptions(cfg.LLM.PlannerPlanModel, token, log, options)
-		if err != nil {
-			return nil, err
-		}
-		coderClient, err := llm.NewCopilotClientWithOptions(cfg.LLM.CoderModel, token, log, options)
-		if err != nil {
-			return nil, err
-		}
-		reviewerClient, err := llm.NewCopilotClientWithOptions(cfg.LLM.ReviewerModel, token, log, options)
-		if err != nil {
-			return nil, err
-		}
-
-		return llm.NewRoutingClient(defaultClient, llm.RoleClients{
-			PlannerClarification: plannerClarificationClient,
-			PlannerPlan:          plannerPlanClient,
-			Coder:                coderClient,
-			Reviewer:             reviewerClient,
-		}), nil
-	case "ollama":
-		baseURL := strings.TrimSpace(cfg.LLM.BaseURL)
-		if baseURL == "" {
-			baseURL = llm.DefaultOllamaBaseURL
-		}
-
-		defaultClient, err := llm.NewOllamaClient(cfg.LLM.Model, baseURL, log)
-		if err != nil {
-			return nil, err
-		}
-
-		plannerClarificationClient, err := llm.NewOllamaClient(cfg.LLM.PlannerClarificationModel, baseURL, log)
-		if err != nil {
-			return nil, err
-		}
-		plannerPlanClient, err := llm.NewOllamaClient(cfg.LLM.PlannerPlanModel, baseURL, log)
-		if err != nil {
-			return nil, err
-		}
-		coderClient, err := llm.NewOllamaClient(cfg.LLM.CoderModel, baseURL, log)
-		if err != nil {
-			return nil, err
-		}
-		reviewerClient, err := llm.NewOllamaClient(cfg.LLM.ReviewerModel, baseURL, log)
-		if err != nil {
-			return nil, err
-		}
-
-		return llm.NewRoutingClient(defaultClient, llm.RoleClients{
-			PlannerClarification: plannerClarificationClient,
-			PlannerPlan:          plannerPlanClient,
-			Coder:                coderClient,
-			Reviewer:             reviewerClient,
-		}), nil
-	default:
-		return nil, fmt.Errorf("未対応の LLM プロバイダーです: %q (対応プロバイダー: copilot, ollama)", cfg.LLM.Provider)
+	defaultClient, err := llm.NewClient(cfg.LLM.Default, log, opts)
+	if err != nil {
+		return nil, fmt.Errorf("llm default client: %w", err)
 	}
+
+	plannerClient, err := llm.NewClient(cfg.LLM.GetPlannerConfig(), log, opts)
+	if err != nil {
+		return nil, fmt.Errorf("llm planner client: %w", err)
+	}
+
+	coderClient, err := llm.NewClient(cfg.LLM.GetCoderConfig(), log, opts)
+	if err != nil {
+		return nil, fmt.Errorf("llm coder client: %w", err)
+	}
+
+	reviewerClient, err := llm.NewClient(cfg.LLM.GetReviewerConfig(), log, opts)
+	if err != nil {
+		return nil, fmt.Errorf("llm reviewer client: %w", err)
+	}
+
+	return llm.NewRoutingClient(defaultClient, llm.RoleClients{
+		PlannerClarification: plannerClient,
+		PlannerPlan:          plannerClient,
+		Coder:                coderClient,
+		Reviewer:             reviewerClient,
+	}), nil
 }
 
 // initGitHub は GITHUB_TOKEN を用いて GitHub クライアントとリポジトリ情報を初期化します。

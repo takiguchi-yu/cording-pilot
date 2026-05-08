@@ -96,12 +96,12 @@ OLLAMA_MODEL=qwen3:3b make ollama-pull
 - YAML は `KnownFields(true)` で厳格にデコード（未知キーはエラー）
 - 複数 YAML ドキュメント（`---` 区切り）は非対応
 - `version` は `"1.0"` 固定
-- `llm.provider` は `copilot` または `ollama`
+- `llm.default.provider` は `copilot` または `ollama`
 - `environment.type` は `local` / `docker` / `nix`
 
 ### 主な設定項目
 
-- `llm`: provider、モデル、ロール別モデル、リトライ、レート制御
+- `llm`: default/planner/coder/reviewer の provider 設定、auto_fix_model、リトライ、レート制御
 - `environment`: 実行環境種別と Docker イメージ
 - `auto_fix`: パイプライン前の修復コマンド列（失敗しても続行）
 - `pipeline`: 品質ゲートとして順序実行されるコマンド列
@@ -115,8 +115,8 @@ OLLAMA_MODEL=qwen3:3b make ollama-pull
 ## LLM プロバイダー開発メモ
 
 - `copilot` を使う場合は `GITHUB_TOKEN` 必須
-- `ollama` は `llm.base_url` 未指定時に `http://localhost:11434/v1` を使用
-- モデルは `planner_*`, `coder_model`, `reviewer_model` に分離可能
+- `ollama` は `llm.default.base_url`（または各エージェントの `base_url`）未指定時に `http://localhost:11434/v1` を使用
+- モデルは `llm.planner.model`, `llm.coder.model`, `llm.reviewer.model` で分離可能
 
 ## 変更時チェックリスト
 

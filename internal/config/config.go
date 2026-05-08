@@ -41,30 +41,62 @@ type Agents struct {
 	Supervisor string `yaml:"supervisor,omitempty"`
 }
 
-// LLM は LLM プロバイダーとモデルの設定を保持します。
-type LLM struct {
+// LLMProviderConfig は単一の LLM プロバイダーへの接続設定を保持します。
+type LLMProviderConfig struct {
 	// Provider は使用する LLM プロバイダーです（例: "copilot", "ollama"）。
 	Provider string `yaml:"provider"`
-	// Model は使用するモデル名です（例: "gpt-4o", "claude-3-5-sonnet-20240620"）。
+	// Model は使用するモデル名です（例: "gpt-4.1", "qwen2.5-coder:3b"）。
 	Model string `yaml:"model"`
 	// BaseURL は LLM API のベース URL です（例: "http://localhost:11434/v1"）。
 	// プロバイダーが独自エンドポイントを必要とする場合に利用します。
 	BaseURL string `yaml:"base_url,omitempty"`
+}
+
+// LLMConfig は LLM プロバイダーとモデルの設定を保持します。
+// エージェントごとに異なるプロバイダーとモデルを指定できるハイブリッド構成をサポートします。
+type LLMConfig struct {
+	// Default はすべてのエージェントで共有するデフォルトのプロバイダー設定です。
+	Default LLMProviderConfig `yaml:"default"`
+	// Planner は Planner エージェント固有のプロバイダー設定です（省略時は Default を使用）。
+	Planner *LLMProviderConfig `yaml:"planner,omitempty"`
+	// Coder は Coder エージェント固有のプロバイダー設定です（省略時は Default を使用）。
+	Coder *LLMProviderConfig `yaml:"coder,omitempty"`
+	// Reviewer は Reviewer エージェント固有のプロバイダー設定です（省略時は Default を使用）。
+	Reviewer *LLMProviderConfig `yaml:"reviewer,omitempty"`
 	// AutoFixModel は自己修復フェーズで使用する軽量モデル名です（例: "gpt-4o-mini"）。
-	// 省略時は Model と同じ値が使用されます。
+	// 省略時は Default.Model と同じ値が使用されます。
 	AutoFixModel string `yaml:"auto_fix_model,omitempty"`
-	// PlannerClarificationModel は Interactive の質問生成で使用するモデル名です。
-	PlannerClarificationModel string `yaml:"planner_clarification_model,omitempty"`
-	// PlannerPlanModel は Plan/CompileIssue で使用するモデル名です。
-	PlannerPlanModel string `yaml:"planner_plan_model,omitempty"`
-	// CoderModel は実装フェーズ（構造化出力）で使用するモデル名です。
-	CoderModel string `yaml:"coder_model,omitempty"`
-	// ReviewerModel はレビューフェーズで使用するモデル名です。
-	ReviewerModel string `yaml:"reviewer_model,omitempty"`
 	// Retry は LLM 呼び出し時のリトライ設定です。
 	Retry LLMRetry `yaml:"retry,omitempty"`
 	// RateLimit は 429 応答時の制御設定です。
 	RateLimit LLMRateLimit `yaml:"rate_limit,omitempty"`
+}
+
+// GetPlannerConfig は Planner エージェントのプロバイダー設定を返します。
+// Planner が nil の場合は Default の設定を返します。
+func (c *LLMConfig) GetPlannerConfig() LLMProviderConfig {
+	if c.Planner != nil {
+		return *c.Planner
+	}
+	return c.Default
+}
+
+// GetCoderConfig は Coder エージェントのプロバイダー設定を返します。
+// Coder が nil の場合は Default の設定を返します。
+func (c *LLMConfig) GetCoderConfig() LLMProviderConfig {
+	if c.Coder != nil {
+		return *c.Coder
+	}
+	return c.Default
+}
+
+// GetReviewerConfig は Reviewer エージェントのプロバイダー設定を返します。
+// Reviewer が nil の場合は Default の設定を返します。
+func (c *LLMConfig) GetReviewerConfig() LLMProviderConfig {
+	if c.Reviewer != nil {
+		return *c.Reviewer
+	}
+	return c.Default
 }
 
 // LLMRetry は LLM 呼び出し時の再試行ポリシーです。
@@ -109,7 +141,7 @@ type Config struct {
 	// Agents は各 AI エージェントのシステムプロンプト設定です。
 	Agents Agents `yaml:"agents"`
 	// LLM は LLM プロバイダーとモデルの設定です。
-	LLM LLM `yaml:"llm"`
+	LLM LLMConfig `yaml:"llm"`
 	// Environment は実行環境の設定です。
 	Environment Environment `yaml:"environment"`
 	// AutoFix は品質チェック実行直前の自動修復コマンドのリストです。
@@ -135,14 +167,12 @@ func DefaultGoConfig() *Config {
 			Coder:    defaultCoderPrompt,
 			Reviewer: defaultReviewerPrompt,
 		},
-		LLM: LLM{
-			Provider:                  defaultLLMProvider,
-			Model:                     defaultLLMModel,
-			AutoFixModel:              "gpt-5-mini",
-			PlannerClarificationModel: defaultLLMModel,
-			PlannerPlanModel:          defaultLLMModel,
-			CoderModel:                defaultLLMModel,
-			ReviewerModel:             defaultLLMModel,
+		LLM: LLMConfig{
+			Default: LLMProviderConfig{
+				Provider: defaultLLMProvider,
+				Model:    defaultLLMModel,
+			},
+			AutoFixModel: "gpt-5-mini",
 			Retry: LLMRetry{
 				Attempts:       3,
 				InitialDelayMS: 500,
@@ -241,26 +271,35 @@ func (c *Config) fillDefaults() {
 	if c.Agents.Reviewer == "" {
 		c.Agents.Reviewer = defaultReviewerPrompt
 	}
-	if c.LLM.Provider == "" {
-		c.LLM.Provider = defaultLLMProvider
+	if c.LLM.Default.Provider == "" {
+		c.LLM.Default.Provider = defaultLLMProvider
 	}
-	if c.LLM.Model == "" {
-		c.LLM.Model = defaultLLMModel
+	if c.LLM.Default.Model == "" {
+		c.LLM.Default.Model = defaultLLMModel
+	}
+	// エージェント別プロバイダー設定の未指定フィールドを Default で補完する
+	fillProvider := func(p *LLMProviderConfig) {
+		if p.Provider == "" {
+			p.Provider = c.LLM.Default.Provider
+		}
+		if p.Model == "" {
+			p.Model = c.LLM.Default.Model
+		}
+		if p.BaseURL == "" {
+			p.BaseURL = c.LLM.Default.BaseURL
+		}
+	}
+	if c.LLM.Planner != nil {
+		fillProvider(c.LLM.Planner)
+	}
+	if c.LLM.Coder != nil {
+		fillProvider(c.LLM.Coder)
+	}
+	if c.LLM.Reviewer != nil {
+		fillProvider(c.LLM.Reviewer)
 	}
 	if c.LLM.AutoFixModel == "" {
-		c.LLM.AutoFixModel = c.LLM.Model
-	}
-	if c.LLM.PlannerClarificationModel == "" {
-		c.LLM.PlannerClarificationModel = c.LLM.Model
-	}
-	if c.LLM.PlannerPlanModel == "" {
-		c.LLM.PlannerPlanModel = c.LLM.Model
-	}
-	if c.LLM.CoderModel == "" {
-		c.LLM.CoderModel = c.LLM.Model
-	}
-	if c.LLM.ReviewerModel == "" {
-		c.LLM.ReviewerModel = c.LLM.Model
+		c.LLM.AutoFixModel = c.LLM.Default.Model
 	}
 	if c.LLM.Retry.Attempts == 0 {
 		c.LLM.Retry.Attempts = 3
@@ -296,11 +335,23 @@ func (c *Config) validate() error {
 	if c.Version != defaultConfigVersion {
 		return fmt.Errorf("version must be %q; got %q", defaultConfigVersion, c.Version)
 	}
-	switch c.LLM.Provider {
-	case defaultLLMProvider, "ollama":
-		// supported providers
-	default:
-		return fmt.Errorf("llm.provider must be one of %q, %q; got %q", defaultLLMProvider, "ollama", c.LLM.Provider)
+	isValidProvider := func(p string) bool {
+		return p == defaultLLMProvider || p == "ollama"
+	}
+	if !isValidProvider(c.LLM.Default.Provider) {
+		return fmt.Errorf("llm.default.provider must be one of %q, %q; got %q", defaultLLMProvider, "ollama", c.LLM.Default.Provider)
+	}
+	for _, named := range []struct {
+		name string
+		cfg  *LLMProviderConfig
+	}{
+		{"planner", c.LLM.Planner},
+		{"coder", c.LLM.Coder},
+		{"reviewer", c.LLM.Reviewer},
+	} {
+		if named.cfg != nil && !isValidProvider(named.cfg.Provider) {
+			return fmt.Errorf("llm.%s.provider must be one of %q, %q; got %q", named.name, defaultLLMProvider, "ollama", named.cfg.Provider)
+		}
 	}
 	if c.LLM.Retry.Attempts < 1 {
 		return fmt.Errorf("llm.retry.attempts must be >= 1; got %d", c.LLM.Retry.Attempts)

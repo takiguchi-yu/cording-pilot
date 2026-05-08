@@ -22,29 +22,27 @@ func TestDefaultGoConfig_デフォルト値が正しく設定される(t *testin
 	if cfg.Project.TestFramework != "standard testing" {
 		t.Errorf("Project.TestFramework=%q; want %q", cfg.Project.TestFramework, "standard testing")
 	}
-	if cfg.LLM.Provider != "copilot" {
-		t.Errorf("LLM.Provider=%q; want %q", cfg.LLM.Provider, "copilot")
+	if cfg.LLM.Default.Provider != "copilot" {
+		t.Errorf("LLM.Default.Provider=%q; want %q", cfg.LLM.Default.Provider, "copilot")
 	}
-	if cfg.LLM.Model != "gpt-4.1" {
-		t.Errorf("LLM.Model=%q; want %q", cfg.LLM.Model, "gpt-4.1")
+	if cfg.LLM.Default.Model != "gpt-4.1" {
+		t.Errorf("LLM.Default.Model=%q; want %q", cfg.LLM.Default.Model, "gpt-4.1")
 	}
-	if cfg.LLM.BaseURL != "" {
-		t.Errorf("LLM.BaseURL=%q; want empty", cfg.LLM.BaseURL)
+	if cfg.LLM.Default.BaseURL != "" {
+		t.Errorf("LLM.Default.BaseURL=%q; want empty", cfg.LLM.Default.BaseURL)
 	}
 	if cfg.LLM.AutoFixModel != "gpt-5-mini" {
 		t.Errorf("LLM.AutoFixModel=%q; want %q", cfg.LLM.AutoFixModel, "gpt-5-mini")
 	}
-	if cfg.LLM.PlannerClarificationModel != cfg.LLM.Model {
-		t.Errorf("LLM.PlannerClarificationModel=%q; want %q", cfg.LLM.PlannerClarificationModel, cfg.LLM.Model)
+	// エージェント固有設定なし → GetXxxConfig() はすべて Default を返す
+	if cfg.LLM.GetPlannerConfig().Model != cfg.LLM.Default.Model {
+		t.Errorf("GetPlannerConfig().Model=%q; want %q", cfg.LLM.GetPlannerConfig().Model, cfg.LLM.Default.Model)
 	}
-	if cfg.LLM.PlannerPlanModel != cfg.LLM.Model {
-		t.Errorf("LLM.PlannerPlanModel=%q; want %q", cfg.LLM.PlannerPlanModel, cfg.LLM.Model)
+	if cfg.LLM.GetCoderConfig().Model != cfg.LLM.Default.Model {
+		t.Errorf("GetCoderConfig().Model=%q; want %q", cfg.LLM.GetCoderConfig().Model, cfg.LLM.Default.Model)
 	}
-	if cfg.LLM.CoderModel != cfg.LLM.Model {
-		t.Errorf("LLM.CoderModel=%q; want %q", cfg.LLM.CoderModel, cfg.LLM.Model)
-	}
-	if cfg.LLM.ReviewerModel != cfg.LLM.Model {
-		t.Errorf("LLM.ReviewerModel=%q; want %q", cfg.LLM.ReviewerModel, cfg.LLM.Model)
+	if cfg.LLM.GetReviewerConfig().Model != cfg.LLM.Default.Model {
+		t.Errorf("GetReviewerConfig().Model=%q; want %q", cfg.LLM.GetReviewerConfig().Model, cfg.LLM.Default.Model)
 	}
 	if cfg.LLM.Retry.Attempts != 3 {
 		t.Errorf("LLM.Retry.Attempts=%d; want 3", cfg.LLM.Retry.Attempts)
@@ -79,32 +77,34 @@ func TestLoad_ファイルが存在しない場合はデフォルト設定を返
 	}
 }
 
-func TestLoad_有効なYAMLファイルを読み込む(t *testing.T) {
+func TestLoad_新フォーマットのYAMLファイルを読み込む(t *testing.T) {
 	t.Parallel()
-	yaml := "version: \"1.0\"\n" +
-		"project:\n" +
-		"  language: python\n" +
-		"  test_framework: pytest\n" +
-		"llm:\n" +
-		"  provider: copilot\n" +
-		"  model: gpt-4o-mini\n" +
-		"  planner_clarification_model: gpt-4o-mini\n" +
-		"  planner_plan_model: gpt-4o\n" +
-		"  coder_model: claude-3.5-sonnet\n" +
-		"  reviewer_model: gpt-4o\n" +
-		"  retry:\n" +
-		"    attempts: 2\n" +
-		"    initial_delay_ms: 100\n" +
-		"    multiplier: 1.5\n" +
-		"  rate_limit:\n" +
-		"    mode: honor_wait\n" +
-		"    max_wait_seconds: 15\n" +
-		"environment:\n" +
-		"  type: local\n" +
-		"pipeline:\n" +
-		"  - name: test\n" +
-		"    command: pytest\n"
-	path := writeTemp(t, yaml)
+	yml := `version: "1.0"
+project:
+  language: python
+  test_framework: pytest
+llm:
+  default:
+    provider: copilot
+    model: gpt-4o-mini
+  coder:
+    provider: ollama
+    model: qwen2.5-coder:3b
+    base_url: http://localhost:11434/v1
+  retry:
+    attempts: 2
+    initial_delay_ms: 100
+    multiplier: 1.5
+  rate_limit:
+    mode: honor_wait
+    max_wait_seconds: 15
+environment:
+  type: local
+pipeline:
+  - name: test
+    command: pytest
+`
+	path := writeTemp(t, yml)
 
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -116,11 +116,19 @@ func TestLoad_有効なYAMLファイルを読み込む(t *testing.T) {
 	if cfg.Project.Language != "python" {
 		t.Errorf("Project.Language=%q; want %q", cfg.Project.Language, "python")
 	}
-	if cfg.LLM.Model != "gpt-4o-mini" {
-		t.Errorf("LLM.Model=%q; want %q", cfg.LLM.Model, "gpt-4o-mini")
+	if cfg.LLM.Default.Model != "gpt-4o-mini" {
+		t.Errorf("LLM.Default.Model=%q; want %q", cfg.LLM.Default.Model, "gpt-4o-mini")
 	}
-	if cfg.LLM.CoderModel != "claude-3.5-sonnet" {
-		t.Errorf("LLM.CoderModel=%q; want %q", cfg.LLM.CoderModel, "claude-3.5-sonnet")
+	// Coder override: Ollama で qwen2.5-coder:3b
+	if cfg.LLM.GetCoderConfig().Provider != "ollama" {
+		t.Errorf("GetCoderConfig().Provider=%q; want %q", cfg.LLM.GetCoderConfig().Provider, "ollama")
+	}
+	if cfg.LLM.GetCoderConfig().Model != "qwen2.5-coder:3b" {
+		t.Errorf("GetCoderConfig().Model=%q; want %q", cfg.LLM.GetCoderConfig().Model, "qwen2.5-coder:3b")
+	}
+	// Planner/Reviewer は Default にフォールバック
+	if cfg.LLM.GetPlannerConfig().Provider != "copilot" {
+		t.Errorf("GetPlannerConfig().Provider=%q; want %q", cfg.LLM.GetPlannerConfig().Provider, "copilot")
 	}
 	if cfg.LLM.RateLimit.Mode != "honor_wait" {
 		t.Errorf("LLM.RateLimit.Mode=%q; want %q", cfg.LLM.RateLimit.Mode, "honor_wait")
@@ -175,14 +183,14 @@ pipeline:
 	if cfg.Project.Language != "go" {
 		t.Errorf("fillDefaults: Language=%q; want %q", cfg.Project.Language, "go")
 	}
-	if cfg.LLM.Provider != "copilot" {
-		t.Errorf("fillDefaults: LLM.Provider=%q; want %q", cfg.LLM.Provider, "copilot")
+	if cfg.LLM.Default.Provider != "copilot" {
+		t.Errorf("fillDefaults: LLM.Default.Provider=%q; want %q", cfg.LLM.Default.Provider, "copilot")
 	}
-	if cfg.LLM.Model != "gpt-4.1" {
-		t.Errorf("fillDefaults: LLM.Model=%q; want %q", cfg.LLM.Model, "gpt-4.1")
+	if cfg.LLM.Default.Model != "gpt-4.1" {
+		t.Errorf("fillDefaults: LLM.Default.Model=%q; want %q", cfg.LLM.Default.Model, "gpt-4.1")
 	}
-	if cfg.LLM.AutoFixModel != cfg.LLM.Model {
-		t.Errorf("fillDefaults: LLM.AutoFixModel=%q; want same as LLM.Model=%q", cfg.LLM.AutoFixModel, cfg.LLM.Model)
+	if cfg.LLM.AutoFixModel != cfg.LLM.Default.Model {
+		t.Errorf("fillDefaults: LLM.AutoFixModel=%q; want same as LLM.Default.Model=%q", cfg.LLM.AutoFixModel, cfg.LLM.Default.Model)
 	}
 	if cfg.Agents.Planner == "" {
 		t.Error("fillDefaults: Agents.Planner should not be empty")
@@ -211,8 +219,9 @@ func TestLoad_autoFixModelを省略するとmodelと同じ値が補完される(
 	t.Parallel()
 	yaml := `version: "1.0"
 llm:
-  provider: copilot
-  model: gpt-5-mini
+  default:
+    provider: copilot
+    model: gpt-5-mini
 environment:
   type: local
 pipeline:
@@ -233,9 +242,10 @@ func TestLoad_ollamaProviderとbaseURLを読み込める(t *testing.T) {
 	t.Parallel()
 	yaml := `version: "1.0"
 llm:
-  provider: ollama
-  model: qwen3:8b
-  base_url: http://localhost:11434/v1
+  default:
+    provider: ollama
+    model: qwen3:8b
+    base_url: http://localhost:11434/v1
 environment:
   type: local
 pipeline:
@@ -247,11 +257,11 @@ pipeline:
 	if err != nil {
 		t.Fatalf("予期しないエラー: %v", err)
 	}
-	if cfg.LLM.Provider != "ollama" {
-		t.Errorf("LLM.Provider=%q; want %q", cfg.LLM.Provider, "ollama")
+	if cfg.LLM.Default.Provider != "ollama" {
+		t.Errorf("LLM.Default.Provider=%q; want %q", cfg.LLM.Default.Provider, "ollama")
 	}
-	if cfg.LLM.BaseURL != "http://localhost:11434/v1" {
-		t.Errorf("LLM.BaseURL=%q; want %q", cfg.LLM.BaseURL, "http://localhost:11434/v1")
+	if cfg.LLM.Default.BaseURL != "http://localhost:11434/v1" {
+		t.Errorf("LLM.Default.BaseURL=%q; want %q", cfg.LLM.Default.BaseURL, "http://localhost:11434/v1")
 	}
 }
 
@@ -299,9 +309,30 @@ pipeline:
 
 func TestLoad_不正なllmProviderはエラーを返す(t *testing.T) {
 	t.Parallel()
-	yaml := `version: "1.0"
+	// 新フォーマットで不正プロバイダーを指定
+	yml := `version: "1.0"
 llm:
-  provider: openai
+  default:
+    provider: openai
+    model: gpt-4.1
+environment:
+  type: local
+pipeline:
+  - name: test
+    command: go test ./...
+`
+	path := writeTemp(t, yml)
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("不正な llm.default.provider でエラーを期待しましたが nil でした")
+	}
+}
+
+func TestLoad_旧フォーマットはエラーを返す(t *testing.T) {
+	t.Parallel()
+	yml := `version: "1.0"
+llm:
+  provider: copilot
   model: gpt-4.1
 environment:
   type: local
@@ -309,19 +340,20 @@ pipeline:
   - name: test
     command: go test ./...
 `
-	path := writeTemp(t, yaml)
+	path := writeTemp(t, yml)
 	_, err := config.Load(path)
 	if err == nil {
-		t.Fatal("不正な llm.provider でエラーを期待しましたが nil でした")
+		t.Fatal("旧フォーマット llm.provider は非サポートのためエラーを期待しましたが nil でした")
 	}
 }
 
 func TestLoad_不正なrateLimitModeはエラーを返す(t *testing.T) {
 	t.Parallel()
-	yaml := `version: "1.0"
+	yml := `version: "1.0"
 llm:
-  provider: copilot
-  model: gpt-4.1
+  default:
+    provider: copilot
+    model: gpt-4.1
   rate_limit:
     mode: invalid_mode
 environment:
@@ -330,7 +362,7 @@ pipeline:
   - name: test
     command: go test ./...
 `
-	path := writeTemp(t, yaml)
+	path := writeTemp(t, yml)
 	_, err := config.Load(path)
 	if err == nil {
 		t.Fatal("不正な llm.rate_limit.mode でエラーを期待しましたが nil でした")
@@ -417,6 +449,109 @@ pipeline:
 	_, err := config.Load(path)
 	if err == nil {
 		t.Fatal("pipeline[0].command が空の場合はエラーを期待しましたが nil でした")
+	}
+}
+
+// ── ハイブリッド構成 (エージェント別プロバイダー設定) ────────────────────────────────────────
+
+func TestLoad_CoderにOllama_PlannerにCopilotのハイブリッド構成(t *testing.T) {
+	t.Parallel()
+	yml := `version: "1.0"
+llm:
+  default:
+    provider: copilot
+    model: gpt-4o-mini
+  coder:
+    provider: ollama
+    model: qwen2.5-coder:3b
+    base_url: http://localhost:11434/v1
+environment:
+  type: local
+pipeline:
+  - name: test
+    command: go test ./...
+`
+	path := writeTemp(t, yml)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("予期しないエラー: %v", err)
+	}
+	// Default: copilot/gpt-4o-mini
+	if cfg.LLM.Default.Provider != "copilot" {
+		t.Errorf("LLM.Default.Provider=%q; want %q", cfg.LLM.Default.Provider, "copilot")
+	}
+	// Coder: ollama オーバーライド
+	coderCfg := cfg.LLM.GetCoderConfig()
+	if coderCfg.Provider != "ollama" {
+		t.Errorf("GetCoderConfig().Provider=%q; want %q", coderCfg.Provider, "ollama")
+	}
+	if coderCfg.Model != "qwen2.5-coder:3b" {
+		t.Errorf("GetCoderConfig().Model=%q; want %q", coderCfg.Model, "qwen2.5-coder:3b")
+	}
+	if coderCfg.BaseURL != "http://localhost:11434/v1" {
+		t.Errorf("GetCoderConfig().BaseURL=%q; want %q", coderCfg.BaseURL, "http://localhost:11434/v1")
+	}
+	// Planner/Reviewer: Default にフォールバック
+	plannerCfg := cfg.LLM.GetPlannerConfig()
+	if plannerCfg.Provider != "copilot" {
+		t.Errorf("GetPlannerConfig().Provider=%q; want %q", plannerCfg.Provider, "copilot")
+	}
+	if plannerCfg.Model != "gpt-4o-mini" {
+		t.Errorf("GetPlannerConfig().Model=%q; want %q", plannerCfg.Model, "gpt-4o-mini")
+	}
+}
+
+func TestLoad_エージェント別設定のプロバイダーが不正な場合はエラーを返す(t *testing.T) {
+	t.Parallel()
+	yml := `version: "1.0"
+llm:
+  default:
+    provider: copilot
+    model: gpt-4o-mini
+  coder:
+    provider: unsupported
+    model: some-model
+environment:
+  type: local
+pipeline:
+  - name: test
+    command: go test ./...
+`
+	path := writeTemp(t, yml)
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("不正な llm.coder.provider でエラーを期待しましたが nil でした")
+	}
+}
+
+func TestLoad_エージェント別設定のプロバイダーを省略するとDefaultから返す(t *testing.T) {
+	t.Parallel()
+	// model のみ指定; provider は Default から補完される
+	yml := `version: "1.0"
+llm:
+  default:
+    provider: copilot
+    model: gpt-4o-mini
+  planner:
+    model: gpt-4o
+environment:
+  type: local
+pipeline:
+  - name: test
+    command: go test ./...
+`
+	path := writeTemp(t, yml)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("予期しないエラー: %v", err)
+	}
+	// Planner: model=gpt-4o, provider=copilot (補完される)
+	plannerCfg := cfg.LLM.GetPlannerConfig()
+	if plannerCfg.Provider != "copilot" {
+		t.Errorf("GetPlannerConfig().Provider=%q; want %q (Defaultから補完)", plannerCfg.Provider, "copilot")
+	}
+	if plannerCfg.Model != "gpt-4o" {
+		t.Errorf("GetPlannerConfig().Model=%q; want %q", plannerCfg.Model, "gpt-4o")
 	}
 }
 
