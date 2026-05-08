@@ -127,6 +127,11 @@ func run(requirement string, issueNumber int, issueURLOwner, issueURLRepo string
 		_ = log.Error("startup", fmt.Sprintf("LLM クライアントの初期化に失敗しました: %v", err))
 		return fmt.Errorf("llm client: %w", err)
 	}
+	plannerLLMClient, err := newPlannerLLMClient(cfg, log)
+	if err != nil {
+		_ = log.Error("startup", fmt.Sprintf("Planner LLM クライアントの初期化に失敗しました: %v", err))
+		return fmt.Errorf("planner llm client: %w", err)
+	}
 
 	// ── GitHub クライアント（オプション） ──────────────────────────────────────
 	ghClient, ghToken, repoOwner, repoName, baseBranch := initGitHub(context.Background(), log)
@@ -168,6 +173,7 @@ func run(requirement string, issueNumber int, issueURLOwner, issueURLRepo string
 	// ── State Graph (wired bottom-up to avoid forward references) ────────────
 	completeState := &workflow.CompleteState{
 		Logger:      log,
+		LLMClient:   plannerLLMClient,
 		GitHub:      ghClient,
 		GitHubToken: ghToken,
 		RepoOwner:   repoOwner,
@@ -265,6 +271,27 @@ func newLLMClient(cfg *config.Config, log *logger.Logger) (llm.Client, error) {
 		Coder:                coderClient,
 		Reviewer:             reviewerClient,
 	}), nil
+}
+
+// newPlannerLLMClient は Planner 用設定の LLM クライアントを生成します。
+func newPlannerLLMClient(cfg *config.Config, log *logger.Logger) (llm.Client, error) {
+	retryPolicy := retry.Policy{
+		MaxAttempts:  cfg.LLM.Retry.Attempts,
+		InitialDelay: time.Duration(cfg.LLM.Retry.InitialDelayMS) * time.Millisecond,
+		Multiplier:   cfg.LLM.Retry.Multiplier,
+	}
+	opts := llm.CopilotOptions{
+		RetryPolicy:      retryPolicy,
+		RateLimitMode:    cfg.LLM.RateLimit.Mode,
+		MaxRateLimitWait: time.Duration(cfg.LLM.RateLimit.MaxWaitSeconds) * time.Second,
+	}
+
+	plannerClient, err := llm.NewClient(cfg.LLM.GetPlannerConfig(), log, opts)
+	if err != nil {
+		return nil, fmt.Errorf("llm planner client: %w", err)
+	}
+
+	return plannerClient, nil
 }
 
 // initGitHub は GITHUB_TOKEN を用いて GitHub クライアントとリポジトリ情報を初期化します。

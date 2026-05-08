@@ -13,6 +13,7 @@ import (
 	"time"
 
 	githubpkg "github.com/takiguchi-yu/cording-pilot/internal/github"
+	"github.com/takiguchi-yu/cording-pilot/internal/llm"
 	"github.com/takiguchi-yu/cording-pilot/pkg/logger"
 )
 
@@ -21,6 +22,8 @@ import (
 // GitHub が設定されている場合は、生成コードをリモートブランチへ push して PR を作成します。
 type CompleteState struct {
 	Logger *logger.Logger
+	// LLMClient は PR 本文の推論生成に使用する LLM クライアントです。
+	LLMClient llm.Client
 	// GitHub は GitHub API クライアントです。nil の場合は GitHub 連携をスキップします。
 	GitHub githubpkg.Client
 	// GitHubToken は git push に使用する Personal Access Token です。
@@ -138,7 +141,14 @@ func (s *CompleteState) pushAndCreatePR(ctx context.Context, wfCtx *Context) err
 			title = issue.Title
 		}
 	}
-	body := buildPRBody(wfCtx.IssueNumber, origDir)
+	if err = s.Logger.Info("complete.generating_pr", "LLMを使用してPR本文を生成しています..."); err != nil {
+		return err
+	}
+
+	body, err := s.generatePRBody(ctx, wfCtx, origDir)
+	if err != nil {
+		return fmt.Errorf("complete: generate PR body: %w", err)
+	}
 	pr, err := s.GitHub.CreatePullRequest(ctx, s.RepoOwner, s.RepoName, title, branchName, base, body)
 	if err != nil {
 		return fmt.Errorf("complete: create PR: %w", err)
@@ -309,9 +319,45 @@ func copyImplementedFiles(origDir, workDir, dst string) error {
 	})
 }
 
-// buildPRBody はリポジトリのPRテンプレートを読み込み、Issue への紐付けキーワードを付与して
-// PR 本文を生成します。テンプレートが存在しない場合はデフォルトメッセージにフォールバックします。
-func buildPRBody(issueNumber int, dir string) string {
+// generatePRBody は PR テンプレートと実装計画を用いて PR 本文を生成します。
+// LLM 推論に失敗した場合は、テンプレートと実装計画を単純連結した本文へフォールバックします。
+func (s *CompleteState) generatePRBody(ctx context.Context, wfCtx *Context, cloneDir string) (string, error) {
+	template, err := readPRTemplate(cloneDir)
+	if err != nil {
+		return "", fmt.Errorf("generate PR body: read template: %w", err)
+	}
+
+	issueText := ""
+	if s.GitHub != nil && wfCtx.IssueNumber > 0 {
+		if issue, issueErr := s.GitHub.GetIssue(ctx, s.RepoOwner, s.RepoName, wfCtx.IssueNumber); issueErr == nil && issue != nil {
+			issueText = fmt.Sprintf("Issue #%d\nTitle: %s\nBody:\n%s", issue.Number, issue.Title, issue.Body)
+		}
+	}
+
+	prompt := buildPRGenerationPrompt(wfCtx.PlanText, issueText, template)
+
+	body := ""
+	if s.LLMClient != nil {
+		generated, genErr := s.LLMClient.Generate(ctx, prompt)
+		if genErr == nil {
+			body = sanitizeMarkdownCodeFence(generated)
+		} else {
+			if logErr := s.Logger.Info("complete.generate_pr_fallback", fmt.Sprintf("LLM 推論に失敗したためフォールバックを使用します: %v", genErr)); logErr != nil {
+				return "", fmt.Errorf("generate PR body: log fallback: %w", logErr)
+			}
+		}
+	}
+
+	if strings.TrimSpace(body) == "" {
+		body = buildPRBodyFallback(wfCtx.PlanText, issueText, template)
+	}
+
+	return appendIssueClose(body, wfCtx.IssueNumber), nil
+}
+
+// readPRTemplate は一般的な PR テンプレートパスを探索して内容を返します。
+// 見つからない場合は空文字を返します。
+func readPRTemplate(dir string) (string, error) {
 	templatePaths := []string{
 		".github/pull_request_template.md",
 		".github/PULL_REQUEST_TEMPLATE.md",
@@ -326,18 +372,70 @@ func buildPRBody(issueNumber int, dir string) string {
 			break
 		}
 	}
+	return body, nil
+}
 
-	if body == "" {
-		body = "Cording Pilot による自動生成 PR です。"
+func buildPRGenerationPrompt(planText, issueText, template string) string {
+	return fmt.Sprintf(`あなたは優秀なソフトウェアエンジニアです。
+以下の「実装計画」をもとに、「PRテンプレート」の各項目を適切に埋めて、Pull Requestの本文を作成してください。
+
+【指示】
+- テンプレートの見出し構造は絶対に破壊しないこと。
+- 実装計画にない項目（特になし、など）は、テンプレートのデフォルトの書き方に従うこと。
+- 出力はマークダウン形式の本文のみとし、不要な解説は含めないこと。
+
+【Issue情報】
+%s
+
+【実装計画】
+%s
+
+【PRテンプレート】
+%s`, issueText, planText, template)
+}
+
+// buildPRBodyFallback は LLM が利用できない場合の安全なフォールバック本文を返します。
+func buildPRBodyFallback(planText, issueText, template string) string {
+	parts := make([]string, 0, 3)
+	if strings.TrimSpace(template) != "" {
+		parts = append(parts, template)
 	}
+	if strings.TrimSpace(issueText) != "" {
+		parts = append(parts, "## Issue情報\n"+issueText)
+	}
+	if strings.TrimSpace(planText) != "" {
+		parts = append(parts, "## 実装計画\n"+planText)
+	}
+	if len(parts) == 0 {
+		return "Cording Pilot による自動生成 PR です。"
+	}
+	return strings.Join(parts, "\n\n")
+}
 
-	if issueNumber > 0 {
-		if !strings.HasSuffix(body, "\n") {
-			body += "\n"
+// sanitizeMarkdownCodeFence は先頭・末尾の markdown コードフェンスを除去します。
+func sanitizeMarkdownCodeFence(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "```") {
+		lines := strings.Split(trimmed, "\n")
+		if len(lines) >= 2 {
+			lines = lines[1:]
+			if len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "```" {
+				lines = lines[:len(lines)-1]
+			}
+			trimmed = strings.TrimSpace(strings.Join(lines, "\n"))
 		}
-		body += fmt.Sprintf("\n---\n\nCloses #%d\n", issueNumber)
 	}
+	return trimmed
+}
 
+func appendIssueClose(body string, issueNumber int) string {
+	if issueNumber <= 0 {
+		return body
+	}
+	if !strings.HasSuffix(body, "\n") {
+		body += "\n"
+	}
+	body += fmt.Sprintf("\n---\n\nCloses #%d\n", issueNumber)
 	return body
 }
 
