@@ -3,6 +3,7 @@
 このドキュメントは、`cording-pilot` を開発・保守するための実践ガイドです。
 
 利用手順は [user-guide.md](./user-guide.md) を参照してください。
+エージェント間の流れは [agent-sequence-diagram.mmd](./agent-sequence-diagram.mmd) を参照してください。
 
 ## このプロジェクトで大事にしていること
 
