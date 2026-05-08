@@ -85,6 +85,15 @@ environment:
   # [条件付き必須] type=docker のとき必須。未指定時(かつ docker): 既定値を補完
   image: "golangci/golangci-lint:latest"
 
+# [任意] プロジェクト固有の知識ソース。
+# Planner / Coder のプロンプトに動的注入されます。
+# ファイルまたはディレクトリを指定できます。
+# ディレクトリ指定時は配下の .md / .txt のみ再帰的に読み込みます。
+knowledge:
+  - ".github/copilot-instructions.md"
+  - "docs/architecture.md"
+  - "docs/rules/"
+
 # [任意] 実行前の自動修復ステップ（失敗しても継続）。
 # 各要素の name/command は、要素を定義するなら必須。
 # リスト自体を省略した場合は既定ステップを補完。

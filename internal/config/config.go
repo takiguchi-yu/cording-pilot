@@ -117,6 +117,9 @@ type Config struct {
 	AutoFix []PipelineStep `yaml:"auto_fix"`
 	// Pipeline は順序が保証されたコマンドのリストです。
 	Pipeline []PipelineStep `yaml:"pipeline"`
+	// Knowledge は LLM プロンプトに注入するプロジェクト固有の知識ソースのパスリストです。
+	// ファイルまたはディレクトリを指定できます。ディレクトリ指定時は .md と .txt のみ読み込みます。
+	Knowledge []string `yaml:"knowledge,omitempty"`
 }
 
 // DefaultGoConfig は .cording-pilot.yml が存在しない場合に使用する Go 向けデフォルト設定です。

@@ -93,6 +93,15 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 	}
 	wfCtx.WorkDir = workDir
 
+	// Knowledge をプロンプトに注入する。
+	knowledge := LoadKnowledge(s.Logger, repoRoot, cfg.Knowledge)
+	if err = s.Logger.Debug("implement.knowledge", fmt.Sprintf("知識として %d 文字読み込みました", utf8.RuneCountInString(knowledge))); err != nil {
+		return nil, err
+	}
+	if knowledge != "" {
+		filteredPlanText = "## プロジェクトの前提知識・ルール (Project Knowledge)\n以下の知識やルールを最優先で遵守して計画・実装を行ってください。\n\n" + knowledge + "\n" + filteredPlanText
+	}
+
 	// Step 0: タスクをサブタスクに分割する（Decomposition）。
 	subtasks, err := s.Coder.DecomposeTask(ctx, filteredPlanText)
 	if err != nil {

@@ -105,6 +105,25 @@ environment:
     type: "local"
 ```
 
+### プロジェクト固有の知識（Knowledge）の注入
+
+`.cording-pilot.yml` の `knowledge` フィールドで、プロジェクト固有のコーディング規約やアーキテクチャルールを記述したファイル・ディレクトリを指定できます。
+指定した内容は Planner・Coder の各エージェントのプロンプト先頭に自動注入されます。
+
+```yaml
+knowledge:
+    - ".github/copilot-instructions.md" # ファイル指定
+    - "docs/architecture.md" # ファイル指定
+    - "docs/rules/" # ディレクトリ指定（.md / .txt のみ読み込まれます）
+```
+
+**Tips: LLM に伝わりやすいドキュメントの書き方**
+
+- 「〜すること」「〜は使用しないこと」のような明確なルールベースの記述が効果的です。
+- 禁止事項と推奨事項を箇条書きで分けると理解しやすくなります。
+- コード例を含めることで、LLM が正確なパターンを学習しやすくなります。
+- 1 ファイルには 1 つのトピックを記述し、ファイル名を意味のある名前にしてください（例: `error-handling.md`、`api-conventions.md`）。
+
 既定では `internal/config.DefaultGoConfig()` のパイプライン (`goimports`, `go fmt`, `go build`, `golangci-lint`, `go test`) が使われます。
 
 ## 実行ログと中断
