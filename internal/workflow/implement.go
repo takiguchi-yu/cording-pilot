@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/takiguchi-yu/cording-pilot/internal/agent"
 	"github.com/takiguchi-yu/cording-pilot/internal/config"
@@ -51,6 +52,25 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 		return nil, err
 	}
 
+	filteredPlanText := FilterIssueForCoder(wfCtx.PlanText)
+	originalChars := utf8.RuneCountInString(strings.TrimSpace(wfCtx.PlanText))
+	filteredChars := utf8.RuneCountInString(strings.TrimSpace(filteredPlanText))
+	reductionPercent := 0.0
+	if originalChars > 0 {
+		reductionPercent = 100.0 * (1.0 - float64(filteredChars)/float64(originalChars))
+	}
+	if err := s.Logger.Debug(
+		"implement.prompt_filter",
+		fmt.Sprintf(
+			"Issue コンテキスト軽量化: before=%d chars, after=%d chars, reduction=%.1f%%",
+			originalChars,
+			filteredChars,
+			reductionPercent,
+		),
+	); err != nil {
+		return nil, err
+	}
+
 	// Set up the isolated working directory as a snapshot of the current repository.
 	workDir, err := os.MkdirTemp("", "cording-pilot-*")
 	if err != nil {
@@ -67,7 +87,7 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 	wfCtx.WorkDir = workDir
 
 	// Step 1: generate test code.
-	testResult, err := s.generateTestCode(ctx, wfCtx)
+	testResult, err := s.generateTestCode(ctx, wfCtx, filteredPlanText)
 	if err != nil {
 		return nil, err
 	}
@@ -105,8 +125,8 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 			return nil, err
 		}
 
-		cacheKey := wfCtx.PlanText + "\n\n" + wfCtx.LastTestOutput
-		implResult, fromCache, genErr := s.generateImplCodeWithCache(ctx, wfCtx, cacheKey, implCache)
+		cacheKey := filteredPlanText + "\n\n" + wfCtx.LastTestOutput
+		implResult, fromCache, genErr := s.generateImplCodeWithCache(ctx, wfCtx, filteredPlanText, cacheKey, implCache)
 		if genErr != nil {
 			// JSON パースエラーの場合はエラー内容を LLM にフィードバックして再試行する。
 			if errors.Is(genErr, llm.ErrJSONParse) {
@@ -272,7 +292,7 @@ func (s *ImplementState) runAutoFix(
 	}
 }
 
-func (s *ImplementState) generateTestCode(ctx context.Context, wfCtx *Context) (agent.CodeGenerationResult, error) {
+func (s *ImplementState) generateTestCode(ctx context.Context, wfCtx *Context, planText string) (agent.CodeGenerationResult, error) {
 	cfg := wfCtx.Config
 	if cfg == nil {
 		cfg = config.DefaultGoConfig()
@@ -281,7 +301,7 @@ func (s *ImplementState) generateTestCode(ctx context.Context, wfCtx *Context) (
 		"[TEST_GEN] 以下の実装計画に基づいて [%s] のテストコードを [%s] を用いて生成してください。ファイルの拡張子やディレクトリ構造は対象言語のベストプラクティスおよび既存のリポジトリ構成に従うこと。\n\n%s",
 		cfg.Project.Language,
 		cfg.Project.TestFramework,
-		wfCtx.PlanText,
+		planText,
 	)
 	result, err := s.Coder.GenerateCode(ctx, prompt)
 	if err != nil {
@@ -290,12 +310,12 @@ func (s *ImplementState) generateTestCode(ctx context.Context, wfCtx *Context) (
 	return result, nil
 }
 
-func (s *ImplementState) generateImplCode(ctx context.Context, wfCtx *Context) (agent.CodeGenerationResult, error) {
+func (s *ImplementState) generateImplCode(ctx context.Context, wfCtx *Context, planText string) (agent.CodeGenerationResult, error) {
 	cfg := wfCtx.Config
 	if cfg == nil {
 		cfg = config.DefaultGoConfig()
 	}
-	planForPrompt := compactPromptText(wfCtx.PlanText, maxPlanPromptChars)
+	planForPrompt := compactPromptText(planText, maxPlanPromptChars)
 	failureOutputForPrompt := compactPromptText(wfCtx.LastTestOutput, maxFailureOutputChars)
 	prompt := fmt.Sprintf(
 		"以下の実装計画とパイプライン失敗の出力を元に、[%s] のプロダクトコードを生成してください。ファイルの拡張子やディレクトリ構造は対象言語のベストプラクティスおよび既存のリポジトリ構成に従うこと。\n\n## 実装計画\n%s\n\n## パイプライン出力\n%s",
@@ -313,6 +333,7 @@ func (s *ImplementState) generateImplCode(ctx context.Context, wfCtx *Context) (
 func (s *ImplementState) generateImplCodeWithCache(
 	ctx context.Context,
 	wfCtx *Context,
+	planText string,
 	cacheKey string,
 	cache map[string]agent.CodeGenerationResult,
 ) (agent.CodeGenerationResult, bool, error) {
@@ -320,7 +341,7 @@ func (s *ImplementState) generateImplCodeWithCache(
 		return result, true, nil
 	}
 
-	result, err := s.generateImplCode(ctx, wfCtx)
+	result, err := s.generateImplCode(ctx, wfCtx, planText)
 	if err != nil {
 		return agent.CodeGenerationResult{}, false, err
 	}

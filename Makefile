@@ -9,7 +9,7 @@ build:
 
 ## run: execute the orchestrator with a sample requirement
 run:
-	go run ./cmd/orchestrator "文字列を逆順にする関数"
+	go run ./cmd/orchestrator "文字列を逆順にする関数をpkgに追加してください"
 
 ## test: run the unit tests
 test:
