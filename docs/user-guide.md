@@ -80,3 +80,89 @@ llm:
 ```
 
 旧フォーマット（`llm.provider` / `llm.model` 直書き）はサポート対象外です。必ず `llm.default` 配下で設定してください。
+
+## 言語非依存（Polyglot）設定
+
+`cording-pilot` は `project` と `pipeline` の設定を変えることで Go 以外のプロジェクトでも利用できます。
+
+### project 設定
+
+| フィールド          | 説明                                                    |
+| ------------------- | ------------------------------------------------------- |
+| `project.language`  | 対象言語（例: `"TypeScript"`, `"Python"`, `"Go"`）      |
+| `project.framework` | フレームワーク名（省略可。例: `"Next.js"`, `"Django"`） |
+
+`project.language` が未指定の場合は `"Go"` がデフォルトとなります。
+
+### pipeline 設定
+
+| フィールド          | 説明                                                               |
+| ------------------- | ------------------------------------------------------------------ |
+| `pipeline.auto_fix` | 品質チェック前に自動修復を試みるコマンドのリスト（失敗しても続行） |
+| `pipeline.check`    | 品質チェックコマンドのリスト（いずれかが失敗したら Fix Loop へ）   |
+
+コマンドは `sh -c` 経由で実行されるため、パイプ（`|`）やリダイレクト（`>`）などのシェル構文も使用できます。`pipeline.check` が未指定の場合は `["go build ./...", "go test ./..."]` がデフォルトとなります。
+
+### TypeScript / Node.js (Jest) プロジェクトの例
+
+```yaml
+version: "1.0"
+project:
+    language: "TypeScript"
+    framework: "Node.js (Jest)"
+llm:
+    default:
+        provider: copilot
+        model: "gpt-4.1"
+environment:
+    type: local
+pipeline:
+    auto_fix:
+        - "npm run lint -- --fix"
+    check:
+        - "npx tsc --noEmit"
+        - "npm test"
+```
+
+### Python / Django プロジェクトの例
+
+```yaml
+version: "1.0"
+project:
+    language: "Python"
+    framework: "Django"
+llm:
+    default:
+        provider: copilot
+        model: "gpt-4.1"
+environment:
+    type: local
+pipeline:
+    auto_fix:
+        - "ruff check --fix ."
+        - "black ."
+    check:
+        - "mypy ."
+        - "pytest"
+```
+
+### Rust プロジェクトの例
+
+```yaml
+version: "1.0"
+project:
+    language: "Rust"
+llm:
+    default:
+        provider: copilot
+        model: "gpt-4.1"
+environment:
+    type: local
+pipeline:
+    auto_fix:
+        - "cargo fmt"
+    check:
+        - "cargo build"
+        - "cargo clippy -- -D warnings"
+        - "cargo test"
+```

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -20,12 +21,12 @@ const (
 	defaultLLMModel      = "gpt-4.1"
 )
 
-// Project はターゲット言語とテストフレームワークの設定を保持します。
+// Project はターゲット言語とフレームワークの設定を保持します。
 type Project struct {
-	// Language は対象プログラミング言語です（例: "go", "python", "typescript"）。
+	// Language は対象プログラミング言語です（例: "Go", "TypeScript", "Python"）。
 	Language string `yaml:"language"`
-	// TestFramework はテストフレームワーク名です（例: "standard testing", "pytest", "jest"）。
-	TestFramework string `yaml:"test_framework"`
+	// Framework はフレームワーク・ライブラリ名です（例: "Next.js", "Django"）。省略可。
+	Framework string `yaml:"framework,omitempty"`
 }
 
 // Agents は各 AI エージェントのシステムプロンプトを保持します。
@@ -124,19 +125,23 @@ type Environment struct {
 	Image string `yaml:"image"`
 }
 
-// PipelineStep は品質チェックパイプラインの 1 ステップを表します。
-type PipelineStep struct {
-	// Name はステップの識別名です（ログ出力に使用されます）。
-	Name string `yaml:"name"`
-	// Command はコンテナ内で実行するシェルコマンド文字列です。
-	Command string `yaml:"command"`
+// PipelineConfig は品質チェックパイプラインの設定を保持します。
+type PipelineConfig struct {
+	// AutoFix は品質チェック実行直前の自動修復コマンドのリストです。
+	// 失敗しても処理は続行し、最終判定は Check コマンドに委ねられます。
+	// 例: ["go mod tidy", "npm run lint -- --fix"]
+	AutoFix []string `yaml:"auto_fix,omitempty"`
+	// Check は順序が保証された品質チェックコマンドのリストです。
+	// いずれかのコマンドが失敗した場合、そのコマンドの出力が LLM へフィードバックされます。
+	// 例: ["go build ./...", "go test -v ./..."]
+	Check []string `yaml:"check"`
 }
 
 // Config は .cording-pilot.yml のトップレベル構造体です。
 type Config struct {
 	// Version は設定ファイルのスキーマバージョンです。
 	Version string `yaml:"version"`
-	// Project はターゲット言語とテストフレームワークの設定です。
+	// Project はターゲット言語とフレームワークの設定です。
 	Project Project `yaml:"project"`
 	// Agents は各 AI エージェントのシステムプロンプト設定です。
 	Agents Agents `yaml:"agents"`
@@ -144,11 +149,9 @@ type Config struct {
 	LLM LLMConfig `yaml:"llm"`
 	// Environment は実行環境の設定です。
 	Environment Environment `yaml:"environment"`
-	// AutoFix は品質チェック実行直前の自動修復コマンドのリストです。
-	// 形式は Pipeline と同等です。失敗しても処理は続行します。
-	AutoFix []PipelineStep `yaml:"auto_fix"`
-	// Pipeline は順序が保証されたコマンドのリストです。
-	Pipeline []PipelineStep `yaml:"pipeline"`
+	// Pipeline は品質チェックパイプラインの設定です。
+	// auto_fix（修復コマンド）と check（品質チェックコマンド）を含みます。
+	Pipeline PipelineConfig `yaml:"pipeline"`
 	// Knowledge は LLM プロンプトに注入するプロジェクト固有の知識ソースのパスリストです。
 	// ファイルまたはディレクトリを指定できます。ディレクトリ指定時は .md と .txt のみ読み込みます。
 	Knowledge []string `yaml:"knowledge,omitempty"`
@@ -159,8 +162,8 @@ func DefaultGoConfig() *Config {
 	return &Config{
 		Version: defaultConfigVersion,
 		Project: Project{
-			Language:      "go",
-			TestFramework: "standard testing",
+			Language:  "Go",
+			Framework: "",
 		},
 		Agents: Agents{
 			Planner:  defaultPlannerPrompt,
@@ -186,16 +189,18 @@ func DefaultGoConfig() *Config {
 		Environment: Environment{
 			Image: "golangci/golangci-lint:latest",
 		},
-		AutoFix: []PipelineStep{
-			{Name: "tidy", Command: "go mod tidy"},
-			{Name: "format", Command: "go fmt ./..."},
-		},
-		Pipeline: []PipelineStep{
-			{Name: "goimports", Command: "goimports -w ."},
-			{Name: "format", Command: "go fmt ./..."},
-			{Name: "typecheck", Command: "go build ./..."},
-			{Name: "lint", Command: "golangci-lint run"},
-			{Name: "test", Command: "go test -v ./..."},
+		Pipeline: PipelineConfig{
+			AutoFix: []string{
+				"go mod tidy",
+				"go run golang.org/x/tools/cmd/goimports@latest -w .",
+				"go fmt ./...",
+			},
+			Check: []string{
+				"go fmt ./...",
+				"go build ./...",
+				"golangci-lint run",
+				"go test -v ./...",
+			},
 		},
 	}
 }
@@ -257,11 +262,9 @@ func (c *Config) fillDefaults() {
 		c.Version = defaultConfigVersion
 	}
 	if c.Project.Language == "" {
-		c.Project.Language = "go"
+		c.Project.Language = "Go"
 	}
-	if c.Project.TestFramework == "" {
-		c.Project.TestFramework = "standard testing"
-	}
+	// Framework は省略可能なためデフォルト値なし。
 	if c.Agents.Planner == "" {
 		c.Agents.Planner = defaultPlannerPrompt
 	}
@@ -322,11 +325,13 @@ func (c *Config) fillDefaults() {
 	if c.Environment.Type == "docker" && c.Environment.Image == "" {
 		c.Environment.Image = DefaultGoConfig().Environment.Image
 	}
-	if len(c.AutoFix) == 0 {
-		c.AutoFix = DefaultGoConfig().AutoFix
+	// Pipeline.AutoFix は省略可能。指定がなければ Go のデフォルト修復コマンドを使用する。
+	if len(c.Pipeline.AutoFix) == 0 {
+		c.Pipeline.AutoFix = DefaultGoConfig().Pipeline.AutoFix
 	}
-	if len(c.Pipeline) == 0 {
-		c.Pipeline = DefaultGoConfig().Pipeline
+	// Pipeline.Check が空の場合は最低限の Go 品質チェックをデフォルトとして補完する。
+	if len(c.Pipeline.Check) == 0 {
+		c.Pipeline.Check = []string{"go build ./...", "go test ./..."}
 	}
 }
 
@@ -381,23 +386,17 @@ func (c *Config) validate() error {
 	default:
 		return fmt.Errorf("environment.type must be one of \"local\", \"docker\", \"nix\"; got %q", c.Environment.Type)
 	}
-	if len(c.Pipeline) == 0 {
-		return fmt.Errorf("pipeline must contain at least one step")
+	if len(c.Pipeline.Check) == 0 {
+		return fmt.Errorf("pipeline.check must contain at least one command")
 	}
-	for i, step := range c.AutoFix {
-		if step.Name == "" {
-			return fmt.Errorf("auto_fix[%d].name must not be empty", i)
-		}
-		if step.Command == "" {
-			return fmt.Errorf("auto_fix[%d].command must not be empty", i)
+	for i, cmd := range c.Pipeline.Check {
+		if strings.TrimSpace(cmd) == "" {
+			return fmt.Errorf("pipeline.check[%d] must not be empty", i)
 		}
 	}
-	for i, step := range c.Pipeline {
-		if step.Name == "" {
-			return fmt.Errorf("pipeline[%d].name must not be empty", i)
-		}
-		if step.Command == "" {
-			return fmt.Errorf("pipeline[%d].command must not be empty", i)
+	for i, cmd := range c.Pipeline.AutoFix {
+		if strings.TrimSpace(cmd) == "" {
+			return fmt.Errorf("pipeline.auto_fix[%d] must not be empty", i)
 		}
 	}
 	return nil

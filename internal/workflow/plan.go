@@ -34,6 +34,10 @@ func (s *PlanState) Execute(ctx context.Context, wfCtx *Context) (State, error) 
 	}
 
 	requirement := wfCtx.Requirement
+	// プロジェクト環境情報をプロンプト冒頭に注入する。
+	if envHeader := BuildProjectEnvHeader(wfCtx.Config); envHeader != "" {
+		requirement = envHeader + "\n\n" + requirement
+	}
 	if knowledge != "" {
 		requirement = "## プロジェクトの前提知識・ルール (Project Knowledge)\n以下の知識やルールを最優先で遵守して計画・実装を行ってください。\n\n" + knowledge + "\n" + requirement
 	}

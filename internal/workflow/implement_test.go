@@ -38,13 +38,13 @@ func (s *stubExecutor) Run(_ context.Context, _, _ string, _ ...string) (string,
 
 // singleStepConfig はテスト用のシンプルな 1 ステップパイプライン設定です。
 // この config を Context に注入することで、テストの stubExecutor の呼び出し回数が
-// デフォルトの 4 ステップ設定の影響を受けないようにします。
+// デフォルトの複数ステップ設定の影響を受けないようにします。
 func singleStepConfig() *config.Config {
 	return &config.Config{
 		Version:     "1.0",
 		Environment: config.Environment{Image: "golang:1.22"},
-		Pipeline: []config.PipelineStep{
-			{Name: "test", Command: "go test ./..."},
+		Pipeline: config.PipelineConfig{
+			Check: []string{"go test ./..."},
 		},
 	}
 }

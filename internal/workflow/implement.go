@@ -54,7 +54,7 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 
 	if err := s.Logger.Info(
 		"implement.config",
-		fmt.Sprintf("Docker イメージ: %s, パイプライン: %d ステップ", cfg.Environment.Image, len(cfg.Pipeline)),
+		fmt.Sprintf("Docker イメージ: %s, パイプライン: %d コマンド", cfg.Environment.Image, len(cfg.Pipeline.Check)),
 	); err != nil {
 		return nil, err
 	}
@@ -144,9 +144,9 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 			}
 		}
 
-		s.runAutoFix(ctx, workDir, cfg.AutoFix, s.Exec)
+		s.runAutoFix(ctx, workDir, cfg.Pipeline.AutoFix, s.Exec)
 
-		initialOut, initialSuccess, initialErr := s.runPipeline(ctx, workDir, cfg.Pipeline)
+		initialOut, initialSuccess, initialErr := s.runPipeline(ctx, workDir, cfg.Pipeline.Check)
 		if initialErr != nil {
 			return nil, fmt.Errorf("implement: initial pipeline run: %w", initialErr)
 		}
@@ -234,9 +234,9 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 				}
 			}
 
-			s.runAutoFix(ctx, workDir, cfg.AutoFix, s.Exec)
+			s.runAutoFix(ctx, workDir, cfg.Pipeline.AutoFix, s.Exec)
 
-			out, success, pipeErr := s.runPipeline(ctx, workDir, cfg.Pipeline)
+			out, success, pipeErr := s.runPipeline(ctx, workDir, cfg.Pipeline.Check)
 			if pipeErr != nil {
 				return nil, fmt.Errorf("implement: pipeline run (subtask %d, iter %d): %w",
 					subtaskIdx+1, wfCtx.TryCount, pipeErr)
@@ -297,39 +297,44 @@ func (s *ImplementState) Execute(ctx context.Context, wfCtx *Context) (State, er
 // いずれかのステップが失敗した時点でループを中断し、それまでの全出力と false を返します。
 // インフラエラー（Executor 自体の障害）は error として伝播します。
 // 全ステップが成功した場合は全出力と true を返します。
-func (s *ImplementState) runPipeline(ctx context.Context, workDir string, steps []config.PipelineStep) (string, bool, error) {
+// runPipeline は cfg.Pipeline.Check の各コマンドを順番に Executor で実行します。
+// いずれかのコマンドが失敗した時点でループを中断し、それまでの全出力と false を返します。
+// インフラエラー（Executor 自体の障害）は error として伝播します。
+// 全コマンドが成功した場合は全出力と true を返します。
+// コマンドは "sh" "-c" 経由で実行するため、パイプ (|) やリダイレクトなどのシェル構文も使用できます。
+func (s *ImplementState) runPipeline(ctx context.Context, workDir string, cmds []string) (string, bool, error) {
 	var sb strings.Builder
-	for _, step := range steps {
-		_ = s.Logger.Info("implement.pipeline_step", fmt.Sprintf("ステップ実行: %s → %s", step.Name, step.Command))
-
-		parts := strings.Fields(step.Command)
-		if len(parts) == 0 {
+	for _, cmdStr := range cmds {
+		if strings.TrimSpace(cmdStr) == "" {
 			continue
 		}
-		cmd, args := parts[0], parts[1:]
+		_ = s.Logger.Info("implement.pipeline_step", fmt.Sprintf("ステップ実行: %s", cmdStr))
 
-		out, success, execErr := s.Exec.Run(ctx, workDir, cmd, args...)
-		fmt.Fprintf(&sb, "=== %s: %s ===\n%s\n", step.Name, step.Command, out)
+		out, success, execErr := s.Exec.Run(ctx, workDir, "sh", "-c", cmdStr)
+		fmt.Fprintf(&sb, "=== %s ===\n%s\n", cmdStr, out)
 		if execErr != nil {
-			return sb.String(), false, fmt.Errorf("step %q: %w", step.Name, execErr)
+			fmt.Fprintf(&sb, "`%s` 実行時のエラー\n", cmdStr)
+			return sb.String(), false, fmt.Errorf("`%s` 実行時のエラー: %w", cmdStr, execErr)
 		}
 		if !success {
+			fmt.Fprintf(&sb, "`%s` が失敗しました\n", cmdStr)
 			return sb.String(), false, nil
 		}
 	}
 	return sb.String(), true, nil
 }
 
-// runAutoFix は auto_fix ステップを順番に Executor で実行します。
-// いずれかのステップが失敗した場合でも、処理を続行（エラーを返さず、ログに出力）します。
+// runAutoFix は pipeline.auto_fix の各コマンドを順番に Executor で実行します。
+// いずれかのコマンドが失敗した場合でも、処理を続行（エラーを返さず、ログに出力）します。
 // 最終的な合否判定は後続の runPipeline に委ねられます。
+// コマンドは "sh" "-c" 経由で実行するため、パイプなどのシェル構文も使用できます。
 func (s *ImplementState) runAutoFix(
 	ctx context.Context,
 	workDir string,
-	steps []config.PipelineStep,
+	cmds []string,
 	exec executor.Executor,
 ) {
-	if len(steps) == 0 {
+	if len(cmds) == 0 {
 		return
 	}
 
@@ -338,19 +343,17 @@ func (s *ImplementState) runAutoFix(
 		return
 	}
 
-	for _, step := range steps {
-		parts := strings.Fields(step.Command)
-		if len(parts) == 0 {
+	for _, cmdStr := range cmds {
+		if strings.TrimSpace(cmdStr) == "" {
 			continue
 		}
-		cmd, args := parts[0], parts[1:]
 
-		out, success, execErr := exec.Run(ctx, workDir, cmd, args...)
+		out, success, execErr := exec.Run(ctx, workDir, "sh", "-c", cmdStr)
 		if execErr != nil {
 			// インフラエラーでもログに出力するが処理は続行
 			_ = s.Logger.Warn(
 				"implement.auto_fix_error",
-				fmt.Sprintf("auto_fix ステップ %q でインフラエラーが発生しましたが処理を続行します: %v\nOutput:\n%s", step.Name, execErr, out),
+				fmt.Sprintf("`%s` 実行時のエラー: %v\nOutput:\n%s", cmdStr, execErr, out),
 			)
 			continue
 		}
@@ -358,14 +361,14 @@ func (s *ImplementState) runAutoFix(
 			// ステップが失敗しても、エラーではなく info として出力
 			_ = s.Logger.Info(
 				"implement.auto_fix_step_failed",
-				fmt.Sprintf("auto_fix ステップ %q が失敗しましたが処理を続行します (最終判定は pipeline に委ねます)\n%s", step.Name, out),
+				fmt.Sprintf("`%s` が失敗しましたが処理を続行します (最終判定は pipeline に委ねます)\n%s", cmdStr, out),
 			)
 			continue
 		}
 		// 成功時もログ出力
 		_ = s.Logger.Debug(
 			"implement.auto_fix_step_success",
-			fmt.Sprintf("auto_fix ステップ %q が成功しました", step.Name),
+			fmt.Sprintf("`%s` が成功しました", cmdStr),
 		)
 	}
 
@@ -381,11 +384,13 @@ func (s *ImplementState) generateTestCode(ctx context.Context, wfCtx *Context, p
 		cfg = config.DefaultGoConfig()
 	}
 	prompt := fmt.Sprintf(
-		"以下の実装計画に基づいて [%s] のテストコードを [%s] を用いて生成してください。ファイルの拡張子やディレクトリ構造は対象言語のベストプラクティスおよび既存のリポジトリ構成に従うこと。\n\n%s",
+		"以下の実装計画に基づいて [%s] のテストコードを生成してください。ファイルの拡張子やディレクトリ構造は対象言語のベストプラクティスおよび既存のリポジトリ構成に従うこと。\n\n%s",
 		cfg.Project.Language,
-		cfg.Project.TestFramework,
 		planText,
 	)
+	if envHeader := BuildProjectEnvHeader(cfg); envHeader != "" {
+		prompt = envHeader + "\n\n" + prompt
+	}
 	if wfCtx.LastTestOutput != "" {
 		prompt = fmt.Sprintf("%s\n\n## 前回のフィードバック\n%s", prompt, wfCtx.LastTestOutput)
 	}

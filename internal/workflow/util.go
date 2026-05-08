@@ -8,7 +8,24 @@ import (
 	"unicode/utf8"
 
 	"github.com/takiguchi-yu/cording-pilot/internal/agent"
+	"github.com/takiguchi-yu/cording-pilot/internal/config"
 )
+
+// BuildProjectEnvHeader は設定ファイルのプロジェクト情報からプロンプト冒頭に挿入する
+// 環境ヘッダー文字列を生成します。config が nil または言語が空の場合は空文字列を返します。
+func BuildProjectEnvHeader(cfg *config.Config) string {
+	if cfg == nil || cfg.Project.Language == "" {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("【プロジェクト環境】\n")
+	sb.WriteString(fmt.Sprintf("- 対象言語: %s\n", cfg.Project.Language))
+	if cfg.Project.Framework != "" {
+		sb.WriteString(fmt.Sprintf("- フレームワーク: %s\n", cfg.Project.Framework))
+	}
+	sb.WriteString("※ 実装・テストコードは必ずこの言語・フレームワークのベストプラクティスに従って記述してください。")
+	return sb.String()
+}
 
 // TruncateLog は長大なログ出力を行数でスマートに切り詰めてトークン消費を抑制します。
 // 総行数が maxLines を超える場合は、先頭10行と末尾(maxLines-10)行を残し、

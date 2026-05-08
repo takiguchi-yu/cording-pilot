@@ -126,6 +126,8 @@ knowledge:
 auto_fix:
   - name: "tidy"
     command: "go mod tidy"
+  - name: "goimports"
+    command: "go run golang.org/x/tools/cmd/goimports@latest -w ."
   - name: "format"
     command: "go fmt ./..."
 
@@ -133,8 +135,6 @@ auto_fix:
 # 各要素の name/command は必須。
 # リストを省略した場合は既定パイプラインを補完。
 pipeline:
-  - name: "goimports"
-    command: "goimports -w ."
   - name: "format"
     command: "go fmt ./..."
   - name: "typecheck"

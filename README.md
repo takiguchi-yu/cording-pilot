@@ -145,6 +145,38 @@ knowledge:
 
 既定では `internal/config.DefaultGoConfig()` のパイプライン (`goimports`, `go fmt`, `go build`, `golangci-lint`, `go test`) が使われます。
 
+### 言語非依存（Polyglot）設定
+
+`project` と `pipeline` を指定することで Go 以外のプロジェクトでも利用できます。
+
+| フィールド          | 説明                                                   |
+| ------------------- | ------------------------------------------------------ |
+| `project.language`  | 対象言語（省略時は `"Go"`）                            |
+| `project.framework` | フレームワーク名（省略可）                             |
+| `pipeline.auto_fix` | 自動修復コマンドのリスト（失敗しても続行）             |
+| `pipeline.check`    | 品質チェックコマンドのリスト（失敗したら Fix Loop へ） |
+
+TypeScript / Node.js (Jest) プロジェクトの設定例:
+
+```yaml
+version: "1.0"
+project:
+    language: "TypeScript"
+    framework: "Node.js (Jest)"
+llm:
+    default:
+        provider: copilot
+        model: "gpt-4.1"
+environment:
+    type: local
+pipeline:
+    auto_fix:
+        - "npm run lint -- --fix"
+    check:
+        - "npx tsc --noEmit"
+        - "npm test"
+```
+
 ## Ollama 利用時の推奨設定
 
 - `make ollama-pull` は既定で `qwen3-coder-next:q4_K_M` を取得します。
