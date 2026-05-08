@@ -36,6 +36,9 @@ type Agents struct {
 	Coder string `yaml:"coder"`
 	// Reviewer はレビューエージェントのシステムプロンプトです。
 	Reviewer string `yaml:"reviewer"`
+	// Supervisor は Fix Loop 迷走時に方針転換を助言する監督エージェントのシステムプロンプトです。
+	// 省略時はデフォルトのシステムプロンプトが使用されます。
+	Supervisor string `yaml:"supervisor,omitempty"`
 }
 
 // LLM は LLM プロバイダーとモデルの設定を保持します。

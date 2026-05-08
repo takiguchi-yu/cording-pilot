@@ -5,6 +5,7 @@ sequenceDiagram
     participant Planner as 計画Agent (要件整理)
     participant GitHub as GitHub (Issue/PR)
     participant Coder as 実装Agent (実装)
+    participant Supervisor as 監督Agent (介入)
     participant Executor as 隔離環境 (Nix/Docker)
     participant Reviewer as 査読Agent (レビュー)
 
@@ -41,29 +42,41 @@ sequenceDiagram
     %% 実装フェーズ (透明度の高い緑)
     rect rgba(50, 200, 100, 0.15)
         Note over Conductor, Reviewer: ② 実装フェーズ (Implement)
-        Conductor->>Coder: 軽量化された実装計画からテストコードを生成 (TDD)
-        Coder->>Executor: テストコード一式を生成(構造化出力)
-        Executor-->>Conductor: テストコード生成完了
-
         Conductor->>Coder: 軽量化された実装計画からサブタスク分割を指示 (Decompose)
         Coder-->>Conductor: サブタスクリストを出力
 
-        Conductor->>Conductor: 初期パイプライン実行 (Red 想定、実装がないため失敗するのが正常)
-        Executor->>Executor: 品質パイプライン実行 (build, lint, test)
-        Executor-->>Conductor: 結果 (Red: エラー出力が得られる)
-
         Conductor->>Conductor: 動的コンテキスト収集 (RAG: ツリー構造・関連ファイル読込)
+
+        loop Phase A: Redになるまでテスト生成 (上限あり)
+            Conductor->>Coder: テストコードのみを生成 (GenerateTest, 構造化JSON)
+            Coder-->>Conductor: files[{path, content または search/replace}]
+            Conductor->>Conductor: WorktreeへPatch適用 (ApplyPatch)
+            Conductor->>Executor: Auto-Fix + 品質パイプライン実行
+            Executor-->>Conductor: 結果 (Green or Red)
+            alt Green (想定外)
+                Conductor->>Coder: 「失敗するテストを書いてください」で再生成要求
+            else Red (想定通り)
+                Conductor->>Conductor: TDDのRed確認完了
+            end
+        end
 
         loop 各サブタスクを順に実行
             loop Fix Loop (上限回数あり)
-                Conductor->>Coder: サブタスクとコンテキストを渡し、実装を指示
-                Coder->>Executor: プロダクトコードを生成(構造化出力)
-                Executor->>Executor: Auto-Fix実行 (例: tidy, fmt, fix)
-                Executor->>Executor: 品質パイプライン実行 (build, lint, test)
+                Conductor->>Coder: サブタスクとコンテキストを渡し、実装のみを指示 (GenerateImpl)
+                Coder-->>Conductor: files[{path, content または search/replace}]
+                Conductor->>Conductor: WorktreeへPatch適用 (ApplyPatch)
+                Conductor->>Executor: Auto-Fix実行 (例: tidy, fmt, fix)
+                Conductor->>Executor: 品質パイプライン実行 (build, lint, test)
                 Executor-->>Conductor: 結果 (Green: 通過, Red: エラー)
 
                 opt エラー(Red)の場合
                     Conductor->>Conductor: エラーログのスマート切り詰め (Token節約)
+                    Conductor->>Conductor: LoopDetectorで同一エラー連続を検知
+                    opt 同一エラーが連続した場合
+                        Conductor->>Supervisor: 現在コード・直近試行・エラーを渡して分析依頼
+                        Supervisor-->>Conductor: 方針転換の助言
+                        Conductor->>Coder: 助言を先頭に付与して別アプローチを要求
+                    end
                 end
             end
         end

@@ -74,7 +74,7 @@ func TestFactory_NewCoder_Askを呼び出す(t *testing.T) {
 func TestFactory_NewCoderAgent_GenerateCodeを呼び出す(t *testing.T) {
 	t.Parallel()
 	want := agent.CodeGenerationResult{
-		Files: []agent.FileUpdate{
+		Files: []agent.FilePatch{
 			{Path: "task.go", Content: "package task\n"},
 		},
 	}

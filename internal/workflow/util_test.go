@@ -1,9 +1,12 @@
 package workflow_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/takiguchi-yu/cording-pilot/internal/agent"
 	"github.com/takiguchi-yu/cording-pilot/internal/workflow"
 )
 
@@ -186,6 +189,129 @@ func TestFilterIssueForCoder(t *testing.T) {
 				if strings.Contains(got, part) {
 					t.Errorf("filtered markdown should not contain %q, got:\n%s", part, got)
 				}
+			}
+		})
+	}
+}
+
+func TestApplyPatch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		setup     func(dir string) error // ファイルを事前に作成する処理
+		patch     agent.FilePatch
+		wantErr   bool
+		wantErrIs string // エラーメッセージに含まれるべき文字列
+		verify    func(t *testing.T, dir string)
+	}{
+		{
+			name:  "Content で新規ファイルを作成する",
+			patch: agent.FilePatch{Path: "new.go", Content: "package main\n"},
+			verify: func(t *testing.T, dir string) {
+				t.Helper()
+				got, err := os.ReadFile(filepath.Join(dir, "new.go"))
+				if err != nil {
+					t.Fatalf("ファイルが作成されていません: %v", err)
+				}
+				if string(got) != "package main\n" {
+					t.Errorf("content=%q; want %q", string(got), "package main\n")
+				}
+			},
+		},
+		{
+			name: "Search/Replace で既存ファイルを修正する",
+			setup: func(dir string) error {
+				return os.WriteFile(filepath.Join(dir, "edit.go"), []byte("package main\n\nfunc Foo() {}\n"), 0o600)
+			},
+			patch: agent.FilePatch{Path: "edit.go", Search: "func Foo() {}", Replace: "func Bar() {}"},
+			verify: func(t *testing.T, dir string) {
+				t.Helper()
+				got, err := os.ReadFile(filepath.Join(dir, "edit.go"))
+				if err != nil {
+					t.Fatalf("ファイルが読み込めません: %v", err)
+				}
+				if !strings.Contains(string(got), "func Bar() {}") {
+					t.Errorf("置換が適用されていません: %s", string(got))
+				}
+				if strings.Contains(string(got), "func Foo() {}") {
+					t.Errorf("置換前の文字列が残っています: %s", string(got))
+				}
+			},
+		},
+		{
+			name: "Search が見つからない場合はエラーを返す",
+			setup: func(dir string) error {
+				return os.WriteFile(filepath.Join(dir, "noop.go"), []byte("package main\n"), 0o600)
+			},
+			patch:     agent.FilePatch{Path: "noop.go", Search: "func NotExist() {}", Replace: "func Bar() {}"},
+			wantErr:   true,
+			wantErrIs: "検索文字列が見つかりません",
+		},
+		{
+			name:      "絶対パスはエラーを返す",
+			patch:     agent.FilePatch{Path: "/etc/passwd", Content: "hacked"},
+			wantErr:   true,
+			wantErrIs: "絶対パスは許可されていません",
+		},
+		{
+			name:      "パストラバーサルはエラーを返す",
+			patch:     agent.FilePatch{Path: "../evil.go", Content: "package main"},
+			wantErr:   true,
+			wantErrIs: "パストラバーサル",
+		},
+		{
+			name:      "content と search 両方が空の場合はエラーを返す",
+			patch:     agent.FilePatch{Path: "empty.go"},
+			wantErr:   true,
+			wantErrIs: "content と search の両方が空",
+		},
+		{
+			name: "行末空白のズレを正規化して置換する",
+			setup: func(dir string) error {
+				// 行末にスペースが付いている場合でも一致するべき。
+				return os.WriteFile(filepath.Join(dir, "trail.go"), []byte("package main  \n\nfunc Old() {}\n"), 0o600)
+			},
+			patch: agent.FilePatch{Path: "trail.go", Search: "func Old() {}", Replace: "func New() {}"},
+			verify: func(t *testing.T, dir string) {
+				t.Helper()
+				got, err := os.ReadFile(filepath.Join(dir, "trail.go"))
+				if err != nil {
+					t.Fatalf("ファイルが読み込めません: %v", err)
+				}
+				if !strings.Contains(string(got), "func New() {}") {
+					t.Errorf("行末空白正規化後の置換が適用されていません: %s", string(got))
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			if tc.setup != nil {
+				if err := tc.setup(dir); err != nil {
+					t.Fatalf("setup failed: %v", err)
+				}
+			}
+
+			err := workflow.ApplyPatch(dir, tc.patch)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("エラーを期待しましたが nil でした")
+				}
+				if tc.wantErrIs != "" && !strings.Contains(err.Error(), tc.wantErrIs) {
+					t.Errorf("エラーに %q が含まれるべき; got: %v", tc.wantErrIs, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.verify != nil {
+				tc.verify(t, dir)
 			}
 		})
 	}

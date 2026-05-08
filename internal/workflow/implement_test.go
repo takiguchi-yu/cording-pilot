@@ -49,10 +49,10 @@ func singleStepConfig() *config.Config {
 	}
 }
 
-// testFiles は [TEST_GEN] タスク向けの標準テストファイルセットを返します。
+// testFiles は標準テストファイルセットを返します。
 func testFiles() agent.CodeGenerationResult {
 	return agent.CodeGenerationResult{
-		Files: []agent.FileUpdate{
+		Files: []agent.FilePatch{
 			{Path: "task_test.go", Content: "package task\nfunc TestDummy(t *testing.T){}\n"},
 		},
 	}
@@ -61,7 +61,7 @@ func testFiles() agent.CodeGenerationResult {
 // implFiles はシンプルな実装ファイルセットを返します。
 func implFiles() agent.CodeGenerationResult {
 	return agent.CodeGenerationResult{
-		Files: []agent.FileUpdate{
+		Files: []agent.FilePatch{
 			{Path: "task.go", Content: "package task\n"},
 		},
 	}
@@ -293,7 +293,7 @@ func TestImplementState_Execute_パストラバーサルでエラーを返す(t 
 	// テスト生成で不正なパスを返す。
 	coder := &funcCoderAgent{fn: func(_ context.Context, _ string) (agent.CodeGenerationResult, error) {
 		return agent.CodeGenerationResult{
-			Files: []agent.FileUpdate{
+			Files: []agent.FilePatch{
 				{Path: "../malicious.go", Content: "package main"},
 			},
 		}, nil
@@ -432,7 +432,7 @@ func TestImplementState_Execute_大きな失敗出力は切り詰めて実装生
 	if got != next {
 		t.Errorf("expected Next state; got %v", got)
 	}
-	if !strings.Contains(implPromptSeen, "[truncated") {
+	if !strings.Contains(implPromptSeen, "(snip") && !strings.Contains(implPromptSeen, "[truncated") {
 		t.Errorf("impl prompt should include truncation marker; got %q", implPromptSeen)
 	}
 }
@@ -441,6 +441,17 @@ func TestImplementState_Execute_大きな失敗出力は切り詰めて実装生
 type funcCoderAgent struct {
 	fn          func(ctx context.Context, task string) (agent.CodeGenerationResult, error)
 	decomposeFn func(ctx context.Context, plan string) ([]string, error)
+}
+
+// GenerateTest は内部的に [TEST_GEN] プレフィックスを付けて fn を呼び出します。
+// これにより、fn の中で strings.Contains(task, "[TEST_GEN]") を使った既存ロジックが引き続き動作します。
+func (a *funcCoderAgent) GenerateTest(ctx context.Context, task string) (agent.CodeGenerationResult, error) {
+	return a.fn(ctx, "[TEST_GEN] "+task)
+}
+
+// GenerateImpl はプレフィックスなしで fn を呼び出します。
+func (a *funcCoderAgent) GenerateImpl(ctx context.Context, task string) (agent.CodeGenerationResult, error) {
+	return a.fn(ctx, task)
 }
 
 func (a *funcCoderAgent) GenerateCode(ctx context.Context, task string) (agent.CodeGenerationResult, error) {
@@ -454,4 +465,175 @@ func (a *funcCoderAgent) DecomposeTask(_ context.Context, plan string) ([]string
 		return a.decomposeFn(context.Background(), plan)
 	}
 	return []string{plan}, nil
+}
+
+// funcSupervisorAgent は関数をバックエンドとする agent.SupervisorAgent スタブです。
+type funcSupervisorAgent struct {
+	fn func(ctx context.Context, currentCode, attempts, errorOutput string) (string, error)
+}
+
+func (a *funcSupervisorAgent) Advise(ctx context.Context, currentCode, attempts, errorOutput string) (string, error) {
+	return a.fn(ctx, currentCode, attempts, errorOutput)
+}
+
+func TestImplementState_Execute_PhaseA_テストが初回Greenの場合に再生成を要求する(t *testing.T) {
+	t.Parallel()
+
+	testGenCallCount := 0
+	coder := &funcCoderAgent{fn: func(_ context.Context, task string) (agent.CodeGenerationResult, error) {
+		if strings.Contains(task, "[TEST_GEN]") {
+			testGenCallCount++
+			return testFiles(), nil
+		}
+		return implFiles(), nil
+	}}
+
+	exec := &stubExecutor{
+		responses: []execResponse{
+			{output: "ok", success: true},    // Phase A 1回目: Green → 再試行
+			{output: "FAIL", success: false}, // Phase A 2回目: Red ✓
+			{output: "ok", success: true},    // Fix Loop → Green
+		},
+	}
+
+	next := &stubState{}
+	s := &workflow.ImplementState{
+		Coder:  coder,
+		Exec:   exec,
+		Logger: logger.New(&strings.Builder{}),
+		Next:   next,
+	}
+
+	wfCtx := &workflow.Context{PlanText: "plan", Config: singleStepConfig()}
+	got, err := s.Execute(context.Background(), wfCtx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != next {
+		t.Errorf("expected Next state; got %v", got)
+	}
+	if testGenCallCount != 2 {
+		t.Errorf("testGenCallCount=%d; want 2 (1回 Green 再試行 + 1回 Red)", testGenCallCount)
+	}
+}
+
+func TestImplementState_Execute_PhaseA_全試行がGreenの場合エラーを返す(t *testing.T) {
+	t.Parallel()
+
+	coder := &funcCoderAgent{fn: func(_ context.Context, task string) (agent.CodeGenerationResult, error) {
+		if strings.Contains(task, "[TEST_GEN]") {
+			return testFiles(), nil
+		}
+		return implFiles(), nil
+	}}
+
+	// maxTestRedRetries 回すべて Green を返す。
+	exec := &stubExecutor{
+		responses: []execResponse{
+			{output: "ok", success: true},
+			{output: "ok", success: true},
+			{output: "ok", success: true},
+		},
+	}
+
+	s := &workflow.ImplementState{
+		Coder:  coder,
+		Exec:   exec,
+		Logger: logger.New(&strings.Builder{}),
+		Next:   &stubState{},
+	}
+
+	_, err := s.Execute(context.Background(), &workflow.Context{PlanText: "plan", Config: singleStepConfig()})
+	if err == nil {
+		t.Fatal("エラーを期待しましたが nil でした")
+	}
+	if !strings.Contains(err.Error(), "Red") {
+		t.Errorf("エラーは Red に関する内容であるべき; got: %v", err)
+	}
+}
+
+func TestImplementState_Execute_ループ検知時にSupervisorを呼び出す(t *testing.T) {
+	t.Parallel()
+
+	supervisorCallCount := 0
+	coder := &funcCoderAgent{fn: func(_ context.Context, task string) (agent.CodeGenerationResult, error) {
+		if strings.Contains(task, "[TEST_GEN]") {
+			return testFiles(), nil
+		}
+		return implFiles(), nil
+	}}
+
+	supervisor := &funcSupervisorAgent{fn: func(_ context.Context, _, _, _ string) (string, error) {
+		supervisorCallCount++
+		return "別のアプローチを試してください", nil
+	}}
+
+	exec := &stubExecutor{
+		responses: []execResponse{
+			{output: "FAIL", success: false}, // Phase A: Red ✓
+			{output: "ERR", success: false},  // Fix Loop iter 0: 失敗
+			{output: "ERR", success: false},  // Fix Loop iter 1: 同一エラー → Supervisor 呼び出し
+			{output: "ok", success: true},    // Fix Loop iter 2: Green (Supervisor 助言後)
+		},
+	}
+
+	next := &stubState{}
+	s := &workflow.ImplementState{
+		Coder:      coder,
+		Supervisor: supervisor,
+		Exec:       exec,
+		Logger:     logger.New(&strings.Builder{}),
+		Next:       next,
+	}
+
+	wfCtx := &workflow.Context{PlanText: "plan", Config: singleStepConfig()}
+	got, err := s.Execute(context.Background(), wfCtx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != next {
+		t.Errorf("expected Next state; got %v", got)
+	}
+	if supervisorCallCount != 1 {
+		t.Errorf("supervisorCallCount=%d; want 1", supervisorCallCount)
+	}
+}
+
+func TestImplementState_Execute_Supervisorがnilの場合はループ検知しても継続する(t *testing.T) {
+	t.Parallel()
+
+	coder := &funcCoderAgent{fn: func(_ context.Context, task string) (agent.CodeGenerationResult, error) {
+		if strings.Contains(task, "[TEST_GEN]") {
+			return testFiles(), nil
+		}
+		return implFiles(), nil
+	}}
+
+	// Supervisor は nil。同一エラーが続いても Fix Loop は通常通り継続する。
+	exec := &stubExecutor{
+		responses: []execResponse{
+			{output: "FAIL", success: false}, // Phase A: Red ✓
+			{output: "ERR", success: false},  // Fix Loop iter 0
+			{output: "ERR", success: false},  // Fix Loop iter 1 (ループ検知 → Supervisor nil → スキップ)
+			{output: "ok", success: true},    // Fix Loop iter 2: Green
+		},
+	}
+
+	next := &stubState{}
+	s := &workflow.ImplementState{
+		Coder:      coder,
+		Supervisor: nil, // Supervisor なし
+		Exec:       exec,
+		Logger:     logger.New(&strings.Builder{}),
+		Next:       next,
+	}
+
+	wfCtx := &workflow.Context{PlanText: "plan", Config: singleStepConfig()}
+	got, err := s.Execute(context.Background(), wfCtx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != next {
+		t.Errorf("expected Next state; got %v", got)
+	}
 }

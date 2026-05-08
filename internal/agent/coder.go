@@ -7,15 +7,19 @@ import (
 	"github.com/takiguchi-yu/cording-pilot/internal/llm"
 )
 
-// FileUpdate は LLM が生成する単一ファイルの更新を表します。
-type FileUpdate struct {
+// FilePatch は LLM が生成する単一ファイルのパッチを表します。
+// 新規ファイルの場合は Content フィールドを使用します。
+// 既存ファイルの修正には Search と Replace フィールドを使用します。
+type FilePatch struct {
 	Path    string `json:"path"`
-	Content string `json:"content"`
+	Content string `json:"content,omitempty"` // 新規ファイル: ファイル全体の内容
+	Search  string `json:"search,omitempty"`  // 既存ファイル修正: 置換対象の文字列（完全一致）
+	Replace string `json:"replace,omitempty"` // 既存ファイル修正: 置換後の文字列
 }
 
 // CodeGenerationResult は LLM によるコード生成の出力を表します。
 type CodeGenerationResult struct {
-	Files []FileUpdate `json:"files"`
+	Files []FilePatch `json:"files"`
 }
 
 // subtaskList は DecomposeTask の JSON レスポンス構造です。
@@ -23,9 +27,23 @@ type subtaskList struct {
 	Subtasks []string `json:"subtasks"`
 }
 
+const (
+	// testGenInstruction はテストコードのみを生成させる指示プレフィックスです。
+	testGenInstruction = "[INSTRUCTION] テストコード（*_test.go）のみを生成してください。プロダクトコードは生成しないでください。テストは最初に必ず失敗（Red）する、意味のあるテストを書いてください。"
+	// implGenInstruction はプロダクトコードのみを生成させる指示プレフィックスです。
+	implGenInstruction = "[INSTRUCTION] プロダクトコードのみを生成してください。テストコードは生成しないでください。"
+)
+
 // CoderAgent は構造化されたコード生成を行うエージェントのインターフェースです。
 type CoderAgent interface {
+	// GenerateTest はタスク記述を元にテストコード（*_test.go）のみを生成します。
+	// 生成されるテストは最初に必ず失敗（Red）する意味のあるテストである必要があります。
+	GenerateTest(ctx context.Context, task string) (CodeGenerationResult, error)
+	// GenerateImpl はタスク記述を元にプロダクトコードのみを生成します。
+	// テストコードは生成しません。
+	GenerateImpl(ctx context.Context, task string) (CodeGenerationResult, error)
 	// GenerateCode はタスク記述を元に構造化コード生成結果を返します。
+	// 後方互換のために残しています。新規コードには GenerateTest / GenerateImpl を使用してください。
 	GenerateCode(ctx context.Context, task string) (CodeGenerationResult, error)
 	// DecomposeTask は実装計画を独立して実装・テスト可能なサブタスクのリストに分割します。
 	// LLM が分割できない場合や空リストを返した場合は、plan を単一要素のスライスとして返します。
@@ -37,6 +55,26 @@ type structuredCoder struct {
 	name         string
 	systemPrompt string
 	llm          llm.Client
+}
+
+// GenerateTest implements CoderAgent.
+func (c *structuredCoder) GenerateTest(ctx context.Context, task string) (CodeGenerationResult, error) {
+	prompt := fmt.Sprintf("%s\n\n%s\n\n---\n\n%s", c.systemPrompt, testGenInstruction, task)
+	var result CodeGenerationResult
+	if err := c.llm.GenerateStructured(ctx, prompt, &result); err != nil {
+		return CodeGenerationResult{}, fmt.Errorf("agent %s: generate test: %w", c.name, err)
+	}
+	return result, nil
+}
+
+// GenerateImpl implements CoderAgent.
+func (c *structuredCoder) GenerateImpl(ctx context.Context, task string) (CodeGenerationResult, error) {
+	prompt := fmt.Sprintf("%s\n\n%s\n\n---\n\n%s", c.systemPrompt, implGenInstruction, task)
+	var result CodeGenerationResult
+	if err := c.llm.GenerateStructured(ctx, prompt, &result); err != nil {
+		return CodeGenerationResult{}, fmt.Errorf("agent %s: generate impl: %w", c.name, err)
+	}
+	return result, nil
 }
 
 // GenerateCode implements CoderAgent.

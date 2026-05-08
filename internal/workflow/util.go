@@ -2,8 +2,12 @@ package workflow
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/takiguchi-yu/cording-pilot/internal/agent"
 )
 
 // TruncateLog は長大なログ出力を行数でスマートに切り詰めてトークン消費を抑制します。
@@ -180,4 +184,73 @@ func shouldFallbackToOriginal(original, filtered string, hasKeptSection bool) bo
 
 	ratio := float64(filteredLen) / float64(originalLen)
 	return ratio < issueFilterMinRatio
+}
+
+// ApplyPatch は workDir 配下の file.Path にパッチを適用します。
+//
+// file.Content が空でない場合: 新規ファイル（または上書き）として書き込みます。
+// file.Search が空でない場合: 既存ファイルを読み込み、Search を Replace に1回だけ置換して保存します。
+// 検索文字列が見つからない場合は、LLM が自己修復できるよう
+// 「検索文字列が見つかりません」を含むエラーを返します。
+func ApplyPatch(workDir string, file agent.FilePatch) error {
+	if filepath.IsAbs(file.Path) {
+		return fmt.Errorf("ApplyPatch: 絶対パスは許可されていません: %q", file.Path)
+	}
+	clean := filepath.Clean(file.Path)
+	if strings.HasPrefix(clean, "..") {
+		return fmt.Errorf("ApplyPatch: パストラバーサルが検出されました: %q", file.Path)
+	}
+	fullPath := filepath.Join(workDir, clean)
+	rel, err := filepath.Rel(workDir, fullPath)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("ApplyPatch: ワークディレクトリ外へのパスは許可されていません: %q", file.Path)
+	}
+
+	// 新規ファイル: Content が指定されている場合は safeWriteFile と同様に書き込む。
+	if file.Content != "" {
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o700); err != nil {
+			return fmt.Errorf("ApplyPatch: ディレクトリ作成に失敗しました: %w", err)
+		}
+		return os.WriteFile(fullPath, []byte(file.Content), 0o600)
+	}
+
+	// 既存ファイルのパッチ適用: Search/Replace が指定されている場合。
+	if file.Search == "" {
+		return fmt.Errorf("ApplyPatch: content と search の両方が空です: %q", file.Path)
+	}
+
+	existing, readErr := os.ReadFile(fullPath)
+	if readErr != nil {
+		return fmt.Errorf("ApplyPatch: ファイルの読み込みに失敗しました %q: %w", file.Path, readErr)
+	}
+	original := string(existing)
+
+	// 完全一致で1回だけ置換する。
+	if strings.Contains(original, file.Search) {
+		replaced := strings.Replace(original, file.Search, file.Replace, 1)
+		return os.WriteFile(fullPath, []byte(replaced), 0o600)
+	}
+
+	// 完全一致が失敗した場合: 行末空白のズレを吸収して再試行する。
+	normalizedOriginal := normalizeLineEndings(original)
+	normalizedSearch := normalizeLineEndings(file.Search)
+	if strings.Contains(normalizedOriginal, normalizedSearch) {
+		replaced := strings.Replace(normalizedOriginal, normalizedSearch, file.Replace, 1)
+		return os.WriteFile(fullPath, []byte(replaced), 0o600)
+	}
+
+	return fmt.Errorf(
+		"ApplyPatch: 検索文字列が見つかりません。path=%q, search=%q (LLM へのフィードバック: search フィールドの文字列をファイルの実際の内容と完全に一致させてください)",
+		file.Path, file.Search,
+	)
+}
+
+// normalizeLineEndings は各行の末尾空白・キャリッジリターンを除去し、
+// 行末の空白ズレに起因するマッチ失敗を防ぎます。
+func normalizeLineEndings(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " \t\r")
+	}
+	return strings.Join(lines, "\n")
 }

@@ -65,3 +65,17 @@ func (f *Factory) NewReviewer() Agent {
 		llm:          f.llm,
 	}
 }
+
+// NewSupervisorAgent は Fix Loop 迷走時に Coder へ方針転換のアドバイスを行う Supervisor エージェントを生成します。
+// cfg.Agents.Supervisor が設定されていない場合はデフォルトのシステムプロンプトを使用します。
+func (f *Factory) NewSupervisorAgent() SupervisorAgent {
+	prompt := f.cfg.Agents.Supervisor
+	if prompt == "" {
+		prompt = defaultSupervisorSystemPrompt
+	}
+	return &structuredSupervisor{
+		name:         "Supervisor",
+		systemPrompt: prompt,
+		llm:          f.llm,
+	}
+}
