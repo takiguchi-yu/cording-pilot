@@ -2,7 +2,7 @@
 
 Go製のAIエージェントオーケストレーターCLIです。要件整理から実装・レビューループ、品質チェックまでをステートマシンで実行します。
 
-[![CI](https://github.com/takiguchi-yu/cording-pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/takiguchi-yu/cording-pilot/actions/workflows/ci.yml)
+[![CI](https://github.com/takiguchi-yu/cording-pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/takiguchi-yu/cording-pilot/actions/workflows/ci.yml) [![Release](https://github.com/takiguchi-yu/cording-pilot/actions/workflows/release.yml/badge.svg)](https://github.com/takiguchi-yu/cording-pilot/actions/workflows/release.yml)
 
 ## サマリー
 
