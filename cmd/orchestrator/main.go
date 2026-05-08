@@ -273,8 +273,42 @@ func newLLMClient(cfg *config.Config, log *logger.Logger) (llm.Client, error) {
 			Coder:                coderClient,
 			Reviewer:             reviewerClient,
 		}), nil
+	case "ollama":
+		baseURL := strings.TrimSpace(cfg.LLM.BaseURL)
+		if baseURL == "" {
+			baseURL = llm.DefaultOllamaBaseURL
+		}
+
+		defaultClient, err := llm.NewOllamaClient(cfg.LLM.Model, baseURL, log)
+		if err != nil {
+			return nil, err
+		}
+
+		plannerClarificationClient, err := llm.NewOllamaClient(cfg.LLM.PlannerClarificationModel, baseURL, log)
+		if err != nil {
+			return nil, err
+		}
+		plannerPlanClient, err := llm.NewOllamaClient(cfg.LLM.PlannerPlanModel, baseURL, log)
+		if err != nil {
+			return nil, err
+		}
+		coderClient, err := llm.NewOllamaClient(cfg.LLM.CoderModel, baseURL, log)
+		if err != nil {
+			return nil, err
+		}
+		reviewerClient, err := llm.NewOllamaClient(cfg.LLM.ReviewerModel, baseURL, log)
+		if err != nil {
+			return nil, err
+		}
+
+		return llm.NewRoutingClient(defaultClient, llm.RoleClients{
+			PlannerClarification: plannerClarificationClient,
+			PlannerPlan:          plannerPlanClient,
+			Coder:                coderClient,
+			Reviewer:             reviewerClient,
+		}), nil
 	default:
-		return nil, fmt.Errorf("未対応の LLM プロバイダーです: %q (対応プロバイダー: copilot)", cfg.LLM.Provider)
+		return nil, fmt.Errorf("未対応の LLM プロバイダーです: %q (対応プロバイダー: copilot, ollama)", cfg.LLM.Provider)
 	}
 }
 

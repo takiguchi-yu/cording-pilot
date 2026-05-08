@@ -40,10 +40,13 @@ type Agents struct {
 
 // LLM は LLM プロバイダーとモデルの設定を保持します。
 type LLM struct {
-	// Provider は使用する LLM プロバイダーです（例: "copilot", "openai"）。
+	// Provider は使用する LLM プロバイダーです（例: "copilot", "ollama"）。
 	Provider string `yaml:"provider"`
 	// Model は使用するモデル名です（例: "gpt-4o", "claude-3-5-sonnet-20240620"）。
 	Model string `yaml:"model"`
+	// BaseURL は LLM API のベース URL です（例: "http://localhost:11434/v1"）。
+	// プロバイダーが独自エンドポイントを必要とする場合に利用します。
+	BaseURL string `yaml:"base_url,omitempty"`
 	// AutoFixModel は自己修復フェーズで使用する軽量モデル名です（例: "gpt-4o-mini"）。
 	// 省略時は Model と同じ値が使用されます。
 	AutoFixModel string `yaml:"auto_fix_model,omitempty"`
@@ -287,8 +290,11 @@ func (c *Config) validate() error {
 	if c.Version != defaultConfigVersion {
 		return fmt.Errorf("version must be %q; got %q", defaultConfigVersion, c.Version)
 	}
-	if c.LLM.Provider != defaultLLMProvider {
-		return fmt.Errorf("llm.provider must be %q; got %q", defaultLLMProvider, c.LLM.Provider)
+	switch c.LLM.Provider {
+	case defaultLLMProvider, "ollama":
+		// supported providers
+	default:
+		return fmt.Errorf("llm.provider must be one of %q, %q; got %q", defaultLLMProvider, "ollama", c.LLM.Provider)
 	}
 	if c.LLM.Retry.Attempts < 1 {
 		return fmt.Errorf("llm.retry.attempts must be >= 1; got %d", c.LLM.Retry.Attempts)

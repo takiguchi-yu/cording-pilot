@@ -28,6 +28,9 @@ func TestDefaultGoConfig_デフォルト値が正しく設定される(t *testin
 	if cfg.LLM.Model != "gpt-4.1" {
 		t.Errorf("LLM.Model=%q; want %q", cfg.LLM.Model, "gpt-4.1")
 	}
+	if cfg.LLM.BaseURL != "" {
+		t.Errorf("LLM.BaseURL=%q; want empty", cfg.LLM.BaseURL)
+	}
 	if cfg.LLM.AutoFixModel != "gpt-5-mini" {
 		t.Errorf("LLM.AutoFixModel=%q; want %q", cfg.LLM.AutoFixModel, "gpt-5-mini")
 	}
@@ -223,6 +226,32 @@ pipeline:
 	}
 	if cfg.LLM.AutoFixModel != "gpt-5-mini" {
 		t.Errorf("fillDefaults: LLM.AutoFixModel=%q; want %q", cfg.LLM.AutoFixModel, "gpt-5-mini")
+	}
+}
+
+func TestLoad_ollamaProviderとbaseURLを読み込める(t *testing.T) {
+	t.Parallel()
+	yaml := `version: "1.0"
+llm:
+  provider: ollama
+  model: qwen3:8b
+  base_url: http://localhost:11434/v1
+environment:
+  type: local
+pipeline:
+  - name: test
+    command: go test ./...
+`
+	path := writeTemp(t, yaml)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("予期しないエラー: %v", err)
+	}
+	if cfg.LLM.Provider != "ollama" {
+		t.Errorf("LLM.Provider=%q; want %q", cfg.LLM.Provider, "ollama")
+	}
+	if cfg.LLM.BaseURL != "http://localhost:11434/v1" {
+		t.Errorf("LLM.BaseURL=%q; want %q", cfg.LLM.BaseURL, "http://localhost:11434/v1")
 	}
 }
 

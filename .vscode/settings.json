@@ -22,6 +22,7 @@
     "ldflags",
     "nixos",
     "nosec",
+    "Ollama",
     "pkgs",
     "Println",
     "pytest",
