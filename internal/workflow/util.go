@@ -19,9 +19,9 @@ func BuildProjectEnvHeader(cfg *config.Config) string {
 	}
 	var sb strings.Builder
 	sb.WriteString("【プロジェクト環境】\n")
-	sb.WriteString(fmt.Sprintf("- 対象言語: %s\n", cfg.Project.Language))
+	fmt.Fprintf(&sb, "- 対象言語: %s\n", cfg.Project.Language)
 	if cfg.Project.Framework != "" {
-		sb.WriteString(fmt.Sprintf("- フレームワーク: %s\n", cfg.Project.Framework))
+		fmt.Fprintf(&sb, "- フレームワーク: %s\n", cfg.Project.Framework)
 	}
 	sb.WriteString("※ 実装・テストコードは必ずこの言語・フレームワークのベストプラクティスに従って記述してください。")
 	return sb.String()

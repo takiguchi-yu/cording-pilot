@@ -15,8 +15,9 @@ version: "1.0"
 project:
   # [任意] 対象言語（例: go, python, typescript）。未指定時: "go"
   language: "go"
-  # [任意] テストフレームワーク名。未指定時: "standard testing"
-  test_framework: "standard testing"
+  # [任意] テストフレームワーク名（簡易的に framework フィールドへ流用しています）。
+  # NOTE: 設定スキーマは framework を受け付けます。
+  framework: "standard testing"
 
 # [任意] 各エージェントのシステムプロンプト上書き。
 # 未指定時は組み込みデフォルトを使用。
@@ -120,26 +121,19 @@ knowledge:
   - "docs/architecture.md"
   - "docs/rules/"
 
-# [任意] 実行前の自動修復ステップ（失敗しても継続）。
-# 各要素の name/command は、要素を定義するなら必須。
-# リスト自体を省略した場合は既定ステップを補完。
-auto_fix:
-  - name: "tidy"
-    command: "go mod tidy"
-  - name: "goimports"
-    command: "go run golang.org/x/tools/cmd/goimports@latest -w ."
-  - name: "format"
-    command: "go fmt ./..."
-
-# [任意] 品質ゲート用パイプライン（順次実行）。
-# 各要素の name/command は必須。
-# リストを省略した場合は既定パイプラインを補完。
+# [任意] 品質ゲート用パイプライン設定。
+# `pipeline` は内部で `auto_fix`（実行前修復コマンドのリスト）と
+# `check`（順次実行する品質チェックコマンドのリスト）を持ちます。
 pipeline:
-  - name: "format"
-    command: "go fmt ./..."
-  - name: "typecheck"
-    command: "go build ./..."
-  - name: "lint"
-    command: "golangci-lint run"
-  - name: "test"
-    command: "go test -v ./..."
+  # [任意] 実行前の自動修復ステップ（失敗しても継続）。
+  auto_fix:
+    - "go mod tidy"
+    - "go run golang.org/x/tools/cmd/goimports@latest -w ."
+    - "go fmt ./..."
+
+  # [任意] 品質チェック用コマンドリスト（順次実行）。
+  check:
+    - "go fmt ./..."
+    - "go build ./..."
+    - "golangci-lint run"
+    - "go test -v ./..."
