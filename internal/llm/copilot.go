@@ -284,12 +284,15 @@ func jsonSchemaFromType(t reflect.Type) map[string]interface{} {
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
 			tag := f.Tag.Get("json")
-			name := strings.Split(tag, ",")[0]
+			parts := strings.Split(tag, ",")
+			name := parts[0]
 			if name == "" || name == "-" {
 				name = f.Name
 			}
 			props[name] = jsonSchemaFromType(f.Type)
-			required = append(required, name)
+			if !hasJSONOption(parts[1:], "omitempty") {
+				required = append(required, name)
+			}
 		}
 		return map[string]interface{}{
 			"type":                 "object",
@@ -314,4 +317,13 @@ func jsonSchemaFromType(t reflect.Type) map[string]interface{} {
 	default:
 		return map[string]interface{}{"type": "string"}
 	}
+}
+
+func hasJSONOption(options []string, target string) bool {
+	for _, opt := range options {
+		if strings.TrimSpace(opt) == target {
+			return true
+		}
+	}
+	return false
 }
