@@ -39,8 +39,8 @@ auto_fix:
   - name: "tidy"
     command: "go mod tidy"
 
-  - name: "goimports"
-    command: "goimports -w ."
+  - name: "format"
+    command: "go fmt ./..."
 
 pipeline:
   - name: "format"

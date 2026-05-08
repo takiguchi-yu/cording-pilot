@@ -149,7 +149,7 @@ func DefaultGoConfig() *Config {
 		},
 		AutoFix: []PipelineStep{
 			{Name: "tidy", Command: "go mod tidy"},
-			{Name: "goimports", Command: "goimports -w ."},
+			{Name: "format", Command: "go fmt ./..."},
 		},
 		Pipeline: []PipelineStep{
 			{Name: "goimports", Command: "goimports -w ."},
@@ -274,6 +274,9 @@ func (c *Config) fillDefaults() {
 	if c.Environment.Type == "docker" && c.Environment.Image == "" {
 		c.Environment.Image = DefaultGoConfig().Environment.Image
 	}
+	if len(c.AutoFix) == 0 {
+		c.AutoFix = DefaultGoConfig().AutoFix
+	}
 	if len(c.Pipeline) == 0 {
 		c.Pipeline = DefaultGoConfig().Pipeline
 	}
@@ -317,6 +320,14 @@ func (c *Config) validate() error {
 	}
 	if len(c.Pipeline) == 0 {
 		return fmt.Errorf("pipeline must contain at least one step")
+	}
+	for i, step := range c.AutoFix {
+		if step.Name == "" {
+			return fmt.Errorf("auto_fix[%d].name must not be empty", i)
+		}
+		if step.Command == "" {
+			return fmt.Errorf("auto_fix[%d].command must not be empty", i)
+		}
 	}
 	for i, step := range c.Pipeline {
 		if step.Name == "" {
